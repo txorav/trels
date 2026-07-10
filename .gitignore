@@ -1,0 +1,11 @@
+# Outputs
+build/bin/
+bin/
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Database (State)
+backend/records.json
+records.json
