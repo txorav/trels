@@ -35,9 +35,11 @@ import (
 var frontendAssets embed.FS
 
 type TrelsRecord struct {
-	Domain  string `json:"domain"`
-	Port    int    `json:"port"`
-	Enabled bool   `json:"enabled"`
+	Domain    string `json:"domain"`
+	Port      int    `json:"port"`
+	Enabled   bool   `json:"enabled"`
+	HTTPS     bool   `json:"https"`
+	RateLimit int    `json:"rateLimit"`
 }
 
 type TrafficStats struct {
@@ -51,29 +53,33 @@ type PortInfo struct {
 	Process string `json:"process"`
 }
 
+type RateLimiter struct {
+	Count     int
+	Timestamp int64
+	Mutex     sync.Mutex
+}
+
 var (
-	mutex        sync.RWMutex
-	recordsFile  string
-	localRecords = make(map[string]TrelsRecord)
-	trafficStore = make(map[string]*TrafficStats)
-	domainRegex  = regexp.MustCompile(`^[a-zA-Z0-9.-]+$`)
+	mutex          sync.RWMutex
+	recordsFile    string
+	localRecords   = make(map[string]TrelsRecord)
+	trafficStore   = make(map[string]*TrafficStats)
+	rateLimitStore = make(map[string]*RateLimiter)
+	domainRegex    = regexp.MustCompile(`^[a-zA-Z0-9.-]+$`)
 )
 
 func init() {
-	// Security: Use absolute path for records.json relative to the executable
 	exePath, err := os.Executable()
 	if err == nil {
 		recordsFile = filepath.Join(filepath.Dir(exePath), "records.json")
 	} else {
-		recordsFile = "records.json" // fallback
+		recordsFile = "records.json"
 	}
 }
 
-// Security: Basic Auth Middleware
 func basicAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, pass, ok := r.BasicAuth()
-		// In a real production app, you would hash these or load from env
 		expectedUser := []byte("admin")
 		expectedPass := []byte("admin")
 
@@ -106,6 +112,9 @@ func loadRecords() {
 				if trafficStore[r.Domain] == nil {
 					trafficStore[r.Domain] = &TrafficStats{}
 				}
+				if rateLimitStore[r.Domain] == nil {
+					rateLimitStore[r.Domain] = &RateLimiter{}
+				}
 			}
 		}
 	}
@@ -120,14 +129,14 @@ func saveRecords() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(recordsFile, data, 0600) // Security: strict permissions
+	return os.WriteFile(recordsFile, data, 0600)
 }
 
 func syncHostsFile() error {
 	path := getHostsFilePath()
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return fmt.Errorf("failed to read hosts file (run as Administrator/root): %v", err)
+		return fmt.Errorf("failed to read hosts file: %v", err)
 	}
 
 	lines := strings.Split(string(content), "\n")
@@ -208,6 +217,9 @@ func handleRecords(w http.ResponseWriter, r *http.Request) {
 		if trafficStore[req.Domain] == nil {
 			trafficStore[req.Domain] = &TrafficStats{}
 		}
+		if rateLimitStore[req.Domain] == nil {
+			rateLimitStore[req.Domain] = &RateLimiter{}
+		}
 		err := saveRecords()
 		mutex.Unlock()
 
@@ -238,6 +250,8 @@ func handleRecords(w http.ResponseWriter, r *http.Request) {
 		
 		mutex.Lock()
 		delete(localRecords, req.Domain)
+		delete(trafficStore, req.Domain)
+		delete(rateLimitStore, req.Domain)
 		saveRecords()
 		err := syncHostsFile()
 		mutex.Unlock()
@@ -389,12 +403,35 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	mutex.RLock()
 	rec, exists := localRecords[host]
 	stats := trafficStore[host]
+	rl := rateLimitStore[host]
 	mutex.RUnlock()
 
 	if !exists || !rec.Enabled {
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprintf(w, "Trels: Domain '%s' not found or not enabled.", host)
 		return
+	}
+
+	if rec.HTTPS && r.TLS == nil {
+		http.Redirect(w, r, "https://"+r.Host+r.RequestURI, http.StatusMovedPermanently)
+		return
+	}
+
+	if rec.RateLimit > 0 && rl != nil {
+		rl.Mutex.Lock()
+		now := time.Now().Unix()
+		if rl.Timestamp != now {
+			rl.Timestamp = now
+			rl.Count = 0
+		}
+		rl.Count++
+		if rl.Count > rec.RateLimit {
+			rl.Mutex.Unlock()
+			w.WriteHeader(http.StatusTooManyRequests)
+			fmt.Fprintf(w, "Trels: Rate limit exceeded for domain '%s'. Maximum %d req/s allowed.", host, rec.RateLimit)
+			return
+		}
+		rl.Mutex.Unlock()
 	}
 
 	if stats != nil {
@@ -431,7 +468,7 @@ func ensureCerts() (string, string, error) {
 
 	if _, err := os.Stat(certPath); err == nil {
 		if _, err := os.Stat(keyPath); err == nil {
-			return certPath, keyPath, nil // Certs already exist
+			return certPath, keyPath, nil 
 		}
 	}
 
@@ -517,7 +554,7 @@ func main() {
 	loadRecords()
 	
 	if err := syncHostsFile(); err != nil {
-		fmt.Println("Warning: Could not sync hosts file initially (run as Administrator/root for full functionality).")
+		fmt.Println("Warning: Could not sync hosts file initially.")
 	}
 
 	certPath, keyPath, err := ensureCerts()
@@ -525,7 +562,6 @@ func main() {
 		fmt.Println("Warning: Could not generate HTTPS certificates:", err)
 	}
 
-	// Proxy can listen on all interfaces
 	proxyMux := http.NewServeMux()
 	proxyMux.HandleFunc("/", proxyHandler)
 	startServerWithFallback(80, "0.0.0.0", proxyMux, "HTTP Proxy")
@@ -533,7 +569,6 @@ func main() {
 		startHTTPSServerWithFallback(443, "0.0.0.0", proxyMux, "HTTPS Proxy", certPath, keyPath)
 	}
 
-	// Admin API MUST be secured with Basic Auth
 	apiMux := http.NewServeMux()
 	apiMux.HandleFunc("/api/records", handleRecords)
 	apiMux.HandleFunc("/api/records/toggle", handleToggle)
@@ -544,13 +579,11 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	// Serve static files with auth too
+	
 	apiMux.Handle("/", http.FileServer(http.FS(subFS)))
-
 	secureMux := basicAuth(apiMux)
 
 	fmt.Println("Starting Admin Panel search...")
-	// Security: Admin panel strictly binds to localhost (127.0.0.1)
 	startServerWithFallback(8080, "127.0.0.1", secureMux, "Admin Panel")
 
 	select {}

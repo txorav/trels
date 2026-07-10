@@ -3,39 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Trels Admin</title>
+    <title>Trels Proxy Admin</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="admin.css">
-    <style>
-        .port-warning {
-            color: #d97706;
-            font-size: 0.75rem;
-            margin-top: 0.25rem;
-            display: none;
-        }
-        .stat-card {
-            background: white;
-            padding: 1.5rem;
-            border-radius: var(--radius);
-            border: 1px solid var(--border);
-            flex: 1;
-        }
-        .stat-grid {
-            display: flex;
-            gap: 1rem;
-            margin-bottom: 2rem;
-            flex-wrap: wrap;
-        }
-        .stat-card h3 { color: var(--muted-foreground); font-size: 0.875rem; margin-bottom: 0.5rem; }
-        .stat-card p { font-size: 1.5rem; font-weight: 600; }
-    </style>
+    <!-- Chart.js and Lucide Icons via CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
 </head>
-<body>
-    <div id="auth-view" class="view-container active">
+<body data-theme="light">
+
+    <!-- Auth View -->
+    <div id="auth-view">
         <div class="card auth-card">
-            <div class="card-header">
-                <h2>Welcome Back</h2>
-                <p>Enter your credentials to access the Trels Admin Panel.</p>
+            <div style="margin-bottom: 1.5rem; text-align: center;">
+                <i data-lucide="network" style="width: 48px; height: 48px; margin: 0 auto 1rem; color: hsl(var(--primary));"></i>
+                <h2 style="font-size: 1.5rem; font-weight: 600;">Trels Admin</h2>
+                <p style="color: hsl(var(--muted-foreground)); font-size: 0.875rem;">Enter credentials to proceed</p>
             </div>
             <form id="login-form">
                 <div class="input-group">
@@ -46,104 +29,220 @@
                     <label for="password">Password</label>
                     <input type="password" id="password" placeholder="••••••••" required>
                 </div>
-                <button type="submit" class="btn btn-primary w-full">Sign In</button>
+                <button type="submit" class="btn btn-primary" style="width: 100%;">Sign In</button>
             </form>
         </div>
     </div>
 
-    <div id="dashboard-wrapper" class="view-container" style="display:none; width: 100%;">
-        <aside class="sidebar">
-            <div class="brand">
-                <div class="logo"></div>
+    <!-- Dashboard App Shell -->
+    <div id="dashboard-wrapper" style="display: none;">
+        
+        <!-- Sidebar -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
                 <h2>Trels</h2>
+                <button class="toggle-sidebar" id="toggle-sidebar-btn">
+                    <i data-lucide="panel-left-close" id="sidebar-icon"></i>
+                </button>
             </div>
-            <nav>
-                <a href="#" class="nav-item active" data-target="dashboard-view">Port Mappings</a>
-                <a href="#" class="nav-item" data-target="monitoring-view">Monitoring & Traffic</a>
-                <a href="#" class="nav-item">Settings</a>
+            
+            <nav class="sidebar-nav">
+                <a class="nav-item active" data-target="dashboard-view" title="Dashboard">
+                    <i data-lucide="layout-dashboard"></i> <span>Dashboard</span>
+                </a>
+                <a class="nav-item" data-target="mappings-view" title="Port Mappings">
+                    <i data-lucide="globe"></i> <span>Port Mappings</span>
+                </a>
             </nav>
+
             <div class="sidebar-footer">
-                <button id="logout-btn" class="btn btn-ghost">Log Out</button>
+                <a class="nav-item" data-target="settings-view" title="Settings">
+                    <i data-lucide="settings"></i> <span>Settings</span>
+                </a>
+                <a class="nav-item" id="logout-btn" title="Log Out">
+                    <i data-lucide="log-out"></i> <span>Log Out</span>
+                </a>
             </div>
         </aside>
-        
-        <main class="content" id="dashboard-view">
-            <header class="content-header">
-                <h1>Port Mappings</h1>
-                <button id="add-record-btn" class="btn btn-primary">Add New Mapping</button>
+
+        <!-- Main Content Area -->
+        <main class="main-area">
+            <!-- Topbar -->
+            <header class="topbar">
+                <div class="omnibar-container">
+                    <i data-lucide="search"></i>
+                    <input type="text" id="omnibar" placeholder="Search mappings, settings, pages...">
+                </div>
+                <div class="topbar-actions">
+                    <button class="icon-btn" id="theme-toggle" title="Toggle Theme">
+                        <i data-lucide="moon" id="theme-icon"></i>
+                    </button>
+                    <button class="icon-btn" title="Profile">
+                        <i data-lucide="user"></i>
+                    </button>
+                </div>
             </header>
 
-            <div class="table-container">
-                <table id="dns-table">
-                    <thead>
-                        <tr>
-                            <th>Domain</th>
-                            <th>Local Port</th>
-                            <th>Status</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="dns-tbody">
-                    </tbody>
-                </table>
-            </div>
-        </main>
-
-        <main class="content" id="monitoring-view" style="display: none;">
-            <header class="content-header">
-                <h1>Live Traffic Monitoring</h1>
-            </header>
-
-            <div class="stat-grid" id="global-stats">
-                <div class="stat-card"><h3>Total Domains</h3><p id="stat-total-domains">0</p></div>
-                <div class="stat-card"><h3>Total Requests</h3><p id="stat-total-requests">0</p></div>
-                <div class="stat-card"><h3>Bandwidth (In/Out)</h3><p id="stat-bandwidth">0 B / 0 B</p></div>
+            <!-- 1. Dashboard View -->
+            <div class="content-view active" id="dashboard-view">
+                <div class="page-header">
+                    <h1>Dashboard</h1>
+                </div>
+                <div class="grid grid-cols-3" style="margin-bottom: 2rem;">
+                    <div class="card">
+                        <div class="card-title">Total Requests <i data-lucide="activity"></i></div>
+                        <div class="card-value" id="stat-total-reqs">0</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-title">Data In <i data-lucide="download"></i></div>
+                        <div class="card-value" id="stat-data-in">0 B</div>
+                    </div>
+                    <div class="card">
+                        <div class="card-title">Data Out <i data-lucide="upload"></i></div>
+                        <div class="card-value" id="stat-data-out">0 B</div>
+                    </div>
+                </div>
+                <div class="card" style="margin-bottom: 2rem;">
+                    <div class="card-title" style="margin-bottom: 1rem;">Global Traffic Overview</div>
+                    <canvas id="global-traffic-chart" height="80"></canvas>
+                </div>
             </div>
 
-            <div class="table-container">
-                <table id="metrics-table">
-                    <thead>
-                        <tr>
-                            <th>Domain</th>
-                            <th>Requests</th>
-                            <th>Bytes In</th>
-                            <th>Bytes Out</th>
-                        </tr>
-                    </thead>
-                    <tbody id="metrics-tbody">
-                    </tbody>
-                </table>
+            <!-- 2. Mappings View -->
+            <div class="content-view" id="mappings-view">
+                <div class="page-header">
+                    <h1>Port Mappings</h1>
+                    <button class="btn btn-primary" id="open-add-modal-btn">
+                        <i data-lucide="plus" style="width: 16px; height: 16px;"></i> Add Mapping
+                    </button>
+                </div>
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Domain</th>
+                                <th>Target Port</th>
+                                <th>HTTPS</th>
+                                <th>Status</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="mappings-tbody">
+                            <!-- Populated via JS -->
+                        </tbody>
+                    </table>
+                </div>
             </div>
+
+            <!-- 3. Mapping Detailed Config View -->
+            <div class="content-view" id="config-view">
+                <div class="config-header">
+                    <button class="icon-btn back-btn" id="back-to-mappings">
+                        <i data-lucide="arrow-left"></i>
+                    </button>
+                    <div>
+                        <h1 id="config-domain-title" style="font-size: 1.5rem; font-weight: 600;">domain.local</h1>
+                        <p style="color: hsl(var(--muted-foreground)); font-size: 0.875rem;">Detailed configuration and monitoring</p>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-2">
+                    <!-- Config Form -->
+                    <div class="card">
+                        <div class="card-title" style="margin-bottom: 1.5rem;">Routing Configuration</div>
+                        <form id="config-form">
+                            <input type="hidden" id="config-domain">
+                            
+                            <div class="input-group">
+                                <label for="config-port">Target Local Port</label>
+                                <input type="number" id="config-port" required min="1" max="65535">
+                            </div>
+
+                            <div class="input-group">
+                                <label for="config-ratelimit">Rate Limit (Requests / second)</label>
+                                <input type="number" id="config-ratelimit" min="0" placeholder="0 = Unlimited">
+                                <p style="font-size: 0.75rem; color: hsl(var(--muted-foreground)); margin-top: 0.25rem;">Set to 0 to disable rate limiting.</p>
+                            </div>
+
+                            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; padding: 1rem; border: 1px solid hsl(var(--border)); border-radius: var(--radius);">
+                                <div>
+                                    <label style="font-weight: 500; font-size: 0.875rem;">Force HTTPS</label>
+                                    <p style="font-size: 0.75rem; color: hsl(var(--muted-foreground));">Redirect HTTP traffic to HTTPS automatically.</p>
+                                </div>
+                                <label class="switch">
+                                    <input type="checkbox" id="config-https">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+
+                            <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 1.5rem; padding: 1rem; border: 1px solid hsl(var(--border)); border-radius: var(--radius);">
+                                <div>
+                                    <label style="font-weight: 500; font-size: 0.875rem;">Enable Proxy</label>
+                                    <p style="font-size: 0.75rem; color: hsl(var(--muted-foreground));">Turn this mapping on or off.</p>
+                                </div>
+                                <label class="switch">
+                                    <input type="checkbox" id="config-enabled">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+
+                            <button type="submit" class="btn btn-primary" style="width: 100%;">Save Changes</button>
+                        </form>
+                    </div>
+
+                    <!-- Domain Specific Chart -->
+                    <div class="card">
+                        <div class="card-title" style="margin-bottom: 1rem;">Domain Traffic (Requests)</div>
+                        <canvas id="domain-traffic-chart" height="150"></canvas>
+                        
+                        <div class="grid grid-cols-2" style="margin-top: 2rem;">
+                            <div>
+                                <div class="card-title">Bytes In</div>
+                                <div class="card-value" id="domain-bytes-in" style="font-size: 1.25rem;">0 B</div>
+                            </div>
+                            <div>
+                                <div class="card-title">Bytes Out</div>
+                                <div class="card-value" id="domain-bytes-out" style="font-size: 1.25rem;">0 B</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 4. Settings View -->
+            <div class="content-view" id="settings-view">
+                <div class="page-header">
+                    <h1>Settings</h1>
+                </div>
+                <div class="card">
+                    <p style="color: hsl(var(--muted-foreground));">Global proxy settings will go here in the future.</p>
+                </div>
+            </div>
+
         </main>
     </div>
 
-    <!-- Modal for adding record -->
-    <div id="add-modal" class="modal">
-        <div class="modal-content card">
-            <div class="card-header">
-                <h2>Add Mapping</h2>
-                <p>Map a custom domain to a local port.</p>
+    <!-- Add Mapping Modal -->
+    <div class="modal-backdrop" id="add-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Create New Mapping</h2>
             </div>
             <form id="add-record-form">
-                <div class="input-group">
-                    <label for="record-domain">Domain (e.g. app.local)</label>
-                    <input type="text" id="record-domain" placeholder="app.local" required pattern="^[a-zA-Z0-9.-]+$" title="Valid domain name required">
+                <div class="modal-body">
+                    <div class="input-group">
+                        <label for="record-domain">Domain (e.g. app.local)</label>
+                        <input type="text" id="record-domain" placeholder="app.local" required pattern="^[a-zA-Z0-9.-]+$" title="Valid domain name required">
+                    </div>
+                    <div class="input-group">
+                        <label for="record-port">Target Local Port</label>
+                        <input type="number" id="record-port" placeholder="3000" required min="1" max="65535" list="open-ports-list">
+                        <datalist id="open-ports-list"></datalist>
+                    </div>
                 </div>
-                <div class="input-group">
-                    <label for="record-port">Target Local Port</label>
-                    <input type="number" id="record-port" placeholder="3000" required min="1" max="65535" list="open-ports-list">
-                    <datalist id="open-ports-list"></datalist>
-                    <div id="port-warning" class="port-warning">⚠ Warning: No active service detected on this port.</div>
-                </div>
-                <div class="input-group">
-                    <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
-                        <input type="checkbox" id="record-enabled" checked style="width: auto;">
-                        Enable mapping immediately
-                    </label>
-                </div>
-                <div class="modal-actions">
-                    <button type="button" id="close-modal-btn" class="btn btn-outline">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Save Mapping</button>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline" id="close-modal-btn">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create</button>
                 </div>
             </form>
         </div>
