@@ -23,7 +23,7 @@ import (
 	"sync"
 )
 
-//go:embed all:../frontend/admin
+//go:embed all:admin_dist
 var frontendAssets embed.FS
 
 type TrelsRecord struct {
@@ -438,7 +438,7 @@ func main() {
 	apiMux.HandleFunc("/api/metrics", handleMetrics)
 	apiMux.HandleFunc("/api/ports", handlePorts)
 
-	subFS, err := fs.Sub(frontendAssets, "../frontend/admin")
+	subFS, err := fs.Sub(frontendAssets, "admin_dist")
 	if err != nil {
 		log.Fatal(err)
 	}

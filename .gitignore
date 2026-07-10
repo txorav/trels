@@ -9,3 +9,6 @@ Thumbs.db
 # Database (State)
 backend/records.json
 records.json
+
+# Build Artifacts
+backend/admin_dist/

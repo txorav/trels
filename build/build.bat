@@ -42,7 +42,12 @@ if %ERRORLEVEL% NEQ 0 (
 )
 echo.
 
-echo [INFO] Step 5: Compiling Go binary...
+echo [INFO] Step 5: Preparing frontend assets for embed...
+xcopy /E /I /Y ..\frontend\admin admin_dist >nul
+echo [OK] Assets copied to backend\admin_dist.
+echo.
+
+echo [INFO] Step 6: Compiling Go binary...
 echo [INFO] Executing: go build -ldflags "-s -w" -v -o ..\build\bin\trels.exe main.go
 go build -ldflags "-s -w" -v -o ..\build\bin\trels.exe main.go
 

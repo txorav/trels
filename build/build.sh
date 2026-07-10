@@ -39,7 +39,13 @@ else
 fi
 echo ""
 
-echo "[INFO] Step 5: Compiling Go binary..."
+echo "[INFO] Step 5: Preparing frontend assets for embed..."
+rm -rf admin_dist
+cp -r ../frontend/admin admin_dist
+echo "[OK] Assets copied to backend/admin_dist."
+echo ""
+
+echo "[INFO] Step 6: Compiling Go binary..."
 echo "[INFO] Executing: go build -ldflags \"-s -w\" -v -o ../build/bin/trels main.go"
 go build -ldflags "-s -w" -v -o ../build/bin/trels main.go
 
