@@ -10,5 +10,11 @@ Thumbs.db
 backend/records.json
 records.json
 
+# SSL Certificates
+backend/cert.pem
+backend/key.pem
+cert.pem
+key.pem
+
 # Build Artifacts
 backend/admin_dist/

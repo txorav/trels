@@ -3,12 +3,19 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/subtle"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"embed"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io/fs"
 	"log"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -21,6 +28,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 //go:embed all:admin_dist
@@ -417,6 +425,92 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func ensureCerts() (string, string, error) {
+	certPath := filepath.Join(filepath.Dir(recordsFile), "cert.pem")
+	keyPath := filepath.Join(filepath.Dir(recordsFile), "key.pem")
+
+	if _, err := os.Stat(certPath); err == nil {
+		if _, err := os.Stat(keyPath); err == nil {
+			return certPath, keyPath, nil // Certs already exist
+		}
+	}
+
+	fmt.Println("Generating self-signed wildcard certificate for Trels...")
+
+	priv, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to generate private key: %v", err)
+	}
+
+	notBefore := time.Now()
+	notAfter := notBefore.Add(365 * 24 * time.Hour)
+
+	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
+	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to generate serial number: %v", err)
+	}
+
+	template := x509.Certificate{
+		SerialNumber: serialNumber,
+		Subject: pkix.Name{
+			Organization: []string{"Trels Proxy"},
+			CommonName:   "Trels Local Proxy",
+		},
+		NotBefore:             notBefore,
+		NotAfter:              notAfter,
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		BasicConstraintsValid: true,
+		DNSNames:              []string{"localhost", "*.local"},
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+	}
+
+	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to create certificate: %v", err)
+	}
+
+	certOut, err := os.Create(certPath)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to open cert.pem for writing: %v", err)
+	}
+	pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+	certOut.Close()
+
+	keyOut, err := os.OpenFile(keyPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to open key.pem for writing: %v", err)
+	}
+	privBytes, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		return "", "", fmt.Errorf("unable to marshal private key: %v", err)
+	}
+	pem.Encode(keyOut, &pem.Block{Type: "PRIVATE KEY", Bytes: privBytes})
+	keyOut.Close()
+
+	return certPath, keyPath, nil
+}
+
+func startHTTPSServerWithFallback(startPort int, bindIP string, handler http.Handler, name string, certFile string, keyFile string) {
+	port := startPort
+	for {
+		addr := fmt.Sprintf("%s:%d", bindIP, port)
+		if bindIP == "" {
+			addr = fmt.Sprintf(":%d", port)
+		}
+		
+		listener, err := net.Listen("tcp", addr)
+		if err != nil {
+			port++
+			continue
+		}
+		fmt.Printf("[%s] Listening on %s (HTTPS)\n", name, addr)
+		go http.ServeTLS(listener, handler, certFile, keyFile)
+		break
+	}
+}
+
 func main() {
 	fmt.Println("Trels Backend starting...")
 	fmt.Printf("Using configuration file: %s\n", recordsFile)
@@ -426,10 +520,18 @@ func main() {
 		fmt.Println("Warning: Could not sync hosts file initially (run as Administrator/root for full functionality).")
 	}
 
+	certPath, keyPath, err := ensureCerts()
+	if err != nil {
+		fmt.Println("Warning: Could not generate HTTPS certificates:", err)
+	}
+
 	// Proxy can listen on all interfaces
 	proxyMux := http.NewServeMux()
 	proxyMux.HandleFunc("/", proxyHandler)
-	startServerWithFallback(80, "0.0.0.0", proxyMux, "Reverse Proxy")
+	startServerWithFallback(80, "0.0.0.0", proxyMux, "HTTP Proxy")
+	if err == nil {
+		startHTTPSServerWithFallback(443, "0.0.0.0", proxyMux, "HTTPS Proxy", certPath, keyPath)
+	}
 
 	// Admin API MUST be secured with Basic Auth
 	apiMux := http.NewServeMux()
