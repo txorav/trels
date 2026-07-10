@@ -48,8 +48,8 @@ echo [OK] Assets copied to backend\admin_dist.
 echo.
 
 echo [INFO] Step 6: Compiling Go binary...
-echo [INFO] Executing: go build -ldflags "-s -w" -v -o ..\build\bin\trels.exe main.go
-go build -ldflags "-s -w" -v -o ..\build\bin\trels.exe main.go
+echo [INFO] Executing: go build -ldflags "-s -w -H=windowsgui" -v -o ..\build\bin\trels.exe main.go
+go build -ldflags "-s -w -H=windowsgui" -v -o ..\build\bin\trels.exe main.go
 
 if %ERRORLEVEL% EQU 0 (
     echo.
