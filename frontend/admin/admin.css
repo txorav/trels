@@ -118,15 +118,28 @@ body {
   height: var(--topbar-height); display: flex; align-items: center;
   justify-content: space-between; padding: 0 0.75rem 0 1rem;
   border-bottom: 1px solid hsl(var(--border)); gap: 0.5rem;
+  transition: padding 0.25s cubic-bezier(0.16, 1, 0.3, 1);
 }
-.sidebar-brand { display: flex; align-items: center; gap: 0.625rem; overflow: hidden; white-space: nowrap; }
+.sidebar.minimized .sidebar-header {
+  padding: 0;
+  justify-content: center;
+}
+
+.sidebar-brand {
+  display: flex; align-items: center; gap: 0.625rem; overflow: hidden; white-space: nowrap;
+  transition: max-width 0.25s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.2s ease;
+  max-width: 180px; opacity: 1;
+}
+.sidebar.minimized .sidebar-brand {
+  max-width: 0; opacity: 0; pointer-events: none;
+}
+
 .sidebar-brand .brand-icon {
   width: 28px; height: 28px; min-width: 28px; border-radius: 6px;
   background: hsl(var(--primary)); color: hsl(var(--primary-foreground));
   display: flex; align-items: center; justify-content: center;
 }
 .sidebar-brand h2 { font-size: 1rem; font-weight: 700; letter-spacing: -0.02em; }
-.sidebar.minimized .sidebar-brand h2 { opacity: 0; width: 0; }
 
 .toggle-sidebar-btn {
   background: none; border: none; cursor: pointer; color: hsl(var(--muted-foreground));
@@ -134,29 +147,43 @@ body {
   border-radius: var(--radius); transition: all 0.2s;
 }
 .toggle-sidebar-btn:hover { background: hsl(var(--muted)); color: hsl(var(--foreground)); }
-.sidebar.minimized .toggle-sidebar-btn { margin: 0 auto; }
 
 .sidebar-nav { flex: 1; padding: 0.75rem 0; display: flex; flex-direction: column; gap: 2px; overflow-y: auto; }
 .sidebar-section-label {
   padding: 0.5rem 1rem 0.25rem; font-size: 0.6875rem; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.05em; color: hsl(var(--muted-foreground));
   overflow: hidden; white-space: nowrap;
+  transition: opacity 0.15s ease, max-height 0.15s ease, padding 0.15s ease, margin 0.15s ease;
+  max-height: 30px; opacity: 1;
 }
-.sidebar.minimized .sidebar-section-label { opacity: 0; height: 0; padding: 0; }
+.sidebar.minimized .sidebar-section-label {
+  opacity: 0; max-height: 0; padding: 0; margin: 0;
+}
 
 .nav-item {
   display: flex; align-items: center; gap: 0.625rem;
   padding: 0.5rem 0.75rem; margin: 0 0.5rem;
   border-radius: var(--radius); color: hsl(var(--muted-foreground));
   text-decoration: none; font-size: 0.8125rem; font-weight: 500;
-  transition: all 0.15s ease; cursor: pointer; white-space: nowrap; overflow: hidden;
+  transition: padding 0.25s cubic-bezier(0.16, 1, 0.3, 1), margin 0.25s cubic-bezier(0.16, 1, 0.3, 1), gap 0.25s cubic-bezier(0.16, 1, 0.3, 1), background 0.15s ease, color 0.15s ease;
+  cursor: pointer; white-space: nowrap; overflow: hidden;
   position: relative;
 }
 .nav-item i, .nav-item svg { width: 18px; height: 18px; min-width: 18px; stroke-width: 1.75; }
 .nav-item:hover { background: hsl(var(--muted)); color: hsl(var(--foreground)); }
 .nav-item.active { background: hsl(var(--secondary)); color: hsl(var(--foreground)); }
-.sidebar.minimized .nav-item { padding: 0.5rem; justify-content: center; margin: 0 0.375rem; }
-.sidebar.minimized .nav-item span { display: none; }
+
+.nav-item span {
+  opacity: 1; max-width: 150px; display: inline-block; white-space: nowrap;
+  transition: opacity 0.2s cubic-bezier(0.16, 1, 0.3, 1), max-width 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.sidebar.minimized .nav-item {
+  padding: 0.5rem 17px; gap: 0; margin: 0 8px;
+}
+.sidebar.minimized .nav-item span {
+  opacity: 0; max-width: 0; pointer-events: none;
+}
 
 .sidebar-footer {
   padding: 0.5rem 0; border-top: 1px solid hsl(var(--border));
