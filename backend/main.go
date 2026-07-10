@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -14,12 +15,12 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 )
 
 //go:embed all:../frontend/admin
@@ -44,11 +45,39 @@ type PortInfo struct {
 
 var (
 	mutex        sync.RWMutex
-	recordsFile  = "records.json"
+	recordsFile  string
 	localRecords = make(map[string]TrelsRecord)
 	trafficStore = make(map[string]*TrafficStats)
 	domainRegex  = regexp.MustCompile(`^[a-zA-Z0-9.-]+$`)
 )
+
+func init() {
+	// Security: Use absolute path for records.json relative to the executable
+	exePath, err := os.Executable()
+	if err == nil {
+		recordsFile = filepath.Join(filepath.Dir(exePath), "records.json")
+	} else {
+		recordsFile = "records.json" // fallback
+	}
+}
+
+// Security: Basic Auth Middleware
+func basicAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, ok := r.BasicAuth()
+		// In a real production app, you would hash these or load from env
+		expectedUser := []byte("admin")
+		expectedPass := []byte("admin")
+
+		if !ok || subtle.ConstantTimeCompare([]byte(user), expectedUser) != 1 || subtle.ConstantTimeCompare([]byte(pass), expectedPass) != 1 {
+			w.Header().Set("WWW-Authenticate", `Basic realm="restricted"`)
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte("Unauthorized\n"))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 func getHostsFilePath() string {
 	if runtime.GOOS == "windows" {
@@ -83,7 +112,7 @@ func saveRecords() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(recordsFile, data, 0644)
+	return os.WriteFile(recordsFile, data, 0600) // Security: strict permissions
 }
 
 func syncHostsFile() error {
@@ -161,7 +190,6 @@ func handleRecords(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Security Patch: Sanitize Domain
 		if !domainRegex.MatchString(req.Domain) {
 			http.Error(w, "Invalid domain name", http.StatusBadRequest)
 			return
@@ -252,7 +280,6 @@ func handleMetrics(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(trafficStore)
 }
 
-// OS-level port scanner
 func getOpenPorts() []PortInfo {
 	var ports []PortInfo
 	portSet := make(map[int]bool)
@@ -270,8 +297,6 @@ func getOpenPorts() []PortInfo {
 					port, _ := strconv.Atoi(portStr)
 					
 					if port > 0 && !portSet[port] {
-						// Basic mapping without full tasklist scan for speed, 
-						// could map PID to name if needed via `tasklist /fi "PID eq x"`
 						ports = append(ports, PortInfo{Port: port, Process: fmt.Sprintf("PID: %s", line[4])})
 						portSet[port] = true
 					}
@@ -279,7 +304,6 @@ func getOpenPorts() []PortInfo {
 			}
 		}
 	} else {
-		// Linux
 		cmd := exec.Command("ss", "-tlnp")
 		out, err := cmd.Output()
 		if err == nil {
@@ -318,22 +342,25 @@ func handlePorts(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(ports)
 }
 
-func startServerWithFallback(startPort int, handler http.Handler, name string) {
+func startServerWithFallback(startPort int, bindIP string, handler http.Handler, name string) {
 	port := startPort
 	for {
-		addr := fmt.Sprintf(":%d", port)
+		addr := fmt.Sprintf("%s:%d", bindIP, port)
+		if bindIP == "" {
+			addr = fmt.Sprintf(":%d", port)
+		}
+		
 		listener, err := net.Listen("tcp", addr)
 		if err != nil {
 			port++
 			continue
 		}
-		fmt.Printf("[%s] Listening on port %d\n", name, port)
+		fmt.Printf("[%s] Listening on %s\n", name, addr)
 		go http.Serve(listener, handler)
 		break
 	}
 }
 
-// Custom ResponseWriter to count bytes sent out
 type trackingWriter struct {
 	http.ResponseWriter
 	bytesWritten int64
@@ -362,7 +389,6 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Traffic Monitoring
 	if stats != nil {
 		mutex.Lock()
 		stats.Requests++
@@ -393,30 +419,37 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 
 func main() {
 	fmt.Println("Trels Backend starting...")
+	fmt.Printf("Using configuration file: %s\n", recordsFile)
 	loadRecords()
 	
 	if err := syncHostsFile(); err != nil {
 		fmt.Println("Warning: Could not sync hosts file initially (run as Administrator/root for full functionality).")
 	}
 
+	// Proxy can listen on all interfaces
 	proxyMux := http.NewServeMux()
 	proxyMux.HandleFunc("/", proxyHandler)
-	startServerWithFallback(80, proxyMux, "Reverse Proxy")
+	startServerWithFallback(80, "0.0.0.0", proxyMux, "Reverse Proxy")
 
-	adminMux := http.NewServeMux()
-	adminMux.HandleFunc("/api/records", handleRecords)
-	adminMux.HandleFunc("/api/records/toggle", handleToggle)
-	adminMux.HandleFunc("/api/metrics", handleMetrics)
-	adminMux.HandleFunc("/api/ports", handlePorts)
+	// Admin API MUST be secured with Basic Auth
+	apiMux := http.NewServeMux()
+	apiMux.HandleFunc("/api/records", handleRecords)
+	apiMux.HandleFunc("/api/records/toggle", handleToggle)
+	apiMux.HandleFunc("/api/metrics", handleMetrics)
+	apiMux.HandleFunc("/api/ports", handlePorts)
 
 	subFS, err := fs.Sub(frontendAssets, "../frontend/admin")
 	if err != nil {
 		log.Fatal(err)
 	}
-	adminMux.Handle("/", http.FileServer(http.FS(subFS)))
+	// Serve static files with auth too
+	apiMux.Handle("/", http.FileServer(http.FS(subFS)))
+
+	secureMux := basicAuth(apiMux)
 
 	fmt.Println("Starting Admin Panel search...")
-	startServerWithFallback(8080, adminMux, "Admin Panel")
+	// Security: Admin panel strictly binds to localhost (127.0.0.1)
+	startServerWithFallback(8080, "127.0.0.1", secureMux, "Admin Panel")
 
 	select {}
 }

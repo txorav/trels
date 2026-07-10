@@ -5,6 +5,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const monitoringView = document.getElementById('monitoring-view');
     const loginForm = document.getElementById('login-form');
     const logoutBtn = document.getElementById('logout-btn');
+    const usernameInput = document.getElementById('username');
+    const passwordInput = document.getElementById('password');
     
     const addModal = document.getElementById('add-modal');
     const addRecordBtn = document.getElementById('add-record-btn');
@@ -17,6 +19,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let openPortsCache = [];
     let metricsInterval;
+
+    // Helper to get auth headers
+    function getAuthHeaders() {
+        const token = sessionStorage.getItem('trels_auth');
+        return {
+            'Content-Type': 'application/json',
+            'Authorization': `Basic ${token}`
+        };
+    }
+
+    // Helper for XSS protection
+    function escapeHtml(unsafe) {
+        return unsafe
+             .replace(/&/g, "&amp;")
+             .replace(/</g, "&lt;")
+             .replace(/>/g, "&gt;")
+             .replace(/"/g, "&quot;")
+             .replace(/'/g, "&#039;");
+    }
 
     // Navigation
     document.querySelectorAll('.nav-item[data-target]').forEach(item => {
@@ -40,15 +61,32 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     });
 
-    loginForm.addEventListener('submit', (e) => {
+    loginForm.addEventListener('submit', async (e) => {
         e.preventDefault();
-        authView.classList.remove('active');
-        dashboardWrapper.style.display = 'flex';
-        fetchRecords(); 
-        fetchOpenPorts();
+        
+        const token = btoa(`${usernameInput.value}:${passwordInput.value}`);
+        sessionStorage.setItem('trels_auth', token);
+
+        try {
+            // Test auth by hitting records
+            const response = await fetch('/api/records', { headers: getAuthHeaders() });
+            if (!response.ok) {
+                if (response.status === 401) throw new Error("Invalid username or password");
+                throw new Error("Failed to connect");
+            }
+            
+            authView.classList.remove('active');
+            dashboardWrapper.style.display = 'flex';
+            fetchRecords(); 
+            fetchOpenPorts();
+        } catch (err) {
+            alert(err.message);
+            sessionStorage.removeItem('trels_auth');
+        }
     });
 
     logoutBtn.addEventListener('click', () => {
+        sessionStorage.removeItem('trels_auth');
         dashboardWrapper.style.display = 'none';
         authView.classList.add('active');
         loginForm.reset();
@@ -69,7 +107,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Port Scanner Logic ---
     async function fetchOpenPorts() {
         try {
-            const res = await fetch('/api/ports');
+            const res = await fetch('/api/ports', { headers: getAuthHeaders() });
             if(res.ok) {
                 openPortsCache = await res.json();
                 datalist.innerHTML = '';
@@ -102,7 +140,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Mappings Logic ---
     async function fetchRecords() {
         try {
-            const response = await fetch('/api/records');
+            const response = await fetch('/api/records', { headers: getAuthHeaders() });
             if (!response.ok) throw new Error('Failed to fetch records');
             const records = await response.json();
             
@@ -110,7 +148,7 @@ document.addEventListener('DOMContentLoaded', () => {
             
             if (records && records.length > 0) {
                 records.forEach(record => {
-                    appendRecordToTable(record.domain, record.port, record.enabled);
+                    appendRecordToTable(escapeHtml(record.domain), record.port, record.enabled);
                 });
             } else {
                 dnsTbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--muted-foreground);">No mappings found.</td></tr>';
@@ -149,7 +187,7 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 await fetch('/api/records/toggle', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: getAuthHeaders(),
                     body: JSON.stringify({ domain: domain, enabled: !currentEnabled })
                 });
                 fetchRecords(); 
@@ -161,7 +199,7 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 await fetch('/api/records', {
                     method: 'DELETE',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: getAuthHeaders(),
                     body: JSON.stringify({ domain: domain })
                 });
                 fetchRecords();
@@ -179,7 +217,7 @@ document.addEventListener('DOMContentLoaded', () => {
         try {
             const response = await fetch('/api/records', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: getAuthHeaders(),
                 body: JSON.stringify({ domain, port, enabled })
             });
 
@@ -204,7 +242,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function fetchMetrics() {
         try {
-            const res = await fetch('/api/metrics');
+            const res = await fetch('/api/metrics', { headers: getAuthHeaders() });
             if(!res.ok) return;
             const metrics = await res.json();
             
@@ -221,7 +259,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 const tr = document.createElement('tr');
                 tr.innerHTML = `
-                    <td>${domain}</td>
+                    <td>${escapeHtml(domain)}</td>
                     <td>${stats.requests}</td>
                     <td>${formatBytes(stats.bytesIn)}</td>
                     <td>${formatBytes(stats.bytesOut)}</td>
