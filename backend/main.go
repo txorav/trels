@@ -37,6 +37,8 @@ import (
 //go:embed all:admin_dist
 var frontendAssets embed.FS
 
+const AppVersion = "v0.1.5"
+
 type TrelsRecord struct {
 	Domain      string `json:"domain"`
 	Port        int    `json:"port"`
@@ -806,6 +808,11 @@ func main() {
 	fmt.Printf("Using configuration file: %s\n", recordsFile)
 	loadRecords()
 	
+	exe, err := os.Executable()
+	if err == nil {
+		os.Remove(exe + ".old")
+	}
+	
 	if err := syncHostsFile(); err != nil {
 		fmt.Println("Warning: Could not sync hosts file initially.")
 	}
@@ -829,8 +836,10 @@ func main() {
 	apiMux.HandleFunc("/api/ports", handlePorts)
 	apiMux.HandleFunc("/api/records/export", handleExport)
 	apiMux.HandleFunc("/api/records/import", handleImport)
+	apiMux.HandleFunc("/api/version", handleVersion)
+	apiMux.HandleFunc("/api/update", handleUpdate)
 
-	subFS, err := fs.Sub(frontendAssets, "admin_dist")
+	subFS, _ := fs.Sub(frontendAssets, "admin_dist")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -840,6 +849,94 @@ func main() {
 
 	fmt.Println("Starting Admin Panel search...")
 	startServerWithFallback(8080, "127.0.0.1", secureMux, "Admin Panel")
-
+	
 	select {}
+}
+
+func handleVersion(w http.ResponseWriter, r *http.Request) {
+	json.NewEncoder(w).Encode(map[string]string{"version": AppVersion})
+}
+
+func handleUpdate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Fetch latest release
+	resp, err := http.Get("https://api.github.com/repos/txorav/trels/releases/latest")
+	if err != nil {
+		http.Error(w, "Failed to check updates", 500)
+		return
+	}
+	defer resp.Body.Close()
+	
+	var release struct {
+		TagName string `json:"tag_name"`
+		Assets  []struct {
+			Name               string `json:"name"`
+			BrowserDownloadURL string `json:"browser_download_url"`
+		} `json:"assets"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		http.Error(w, "Failed to parse updates", 500)
+		return
+	}
+	
+	if release.TagName == AppVersion {
+		json.NewEncoder(w).Encode(map[string]bool{"updated": false})
+		return
+	}
+	
+	assetName := fmt.Sprintf("trels-%s-%s", runtime.GOOS, runtime.GOARCH)
+	if runtime.GOOS == "windows" {
+		assetName += ".exe"
+	}
+	
+	var downloadURL string
+	for _, a := range release.Assets {
+		if a.Name == assetName {
+			downloadURL = a.BrowserDownloadURL
+			break
+		}
+	}
+	
+	if downloadURL == "" {
+		http.Error(w, "No update asset found for this platform", 404)
+		return
+	}
+	
+	// Download
+	dResp, err := http.Get(downloadURL)
+	if err != nil || dResp.StatusCode != 200 {
+		http.Error(w, "Failed to download update", 500)
+		return
+	}
+	defer dResp.Body.Close()
+	
+	exePath, err := os.Executable()
+	if err != nil {
+		http.Error(w, "Failed to get executable path", 500)
+		return
+	}
+	
+	if runtime.GOOS == "windows" {
+		os.Rename(exePath, exePath+".old")
+	}
+	
+	out, err := os.OpenFile(exePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		if runtime.GOOS == "windows" {
+			os.Rename(exePath+".old", exePath)
+		}
+		http.Error(w, "Failed to write update: "+err.Error(), 500)
+		return
+	}
+	defer out.Close()
+	
+	if _, err := io.Copy(out, dResp.Body); err != nil {
+		http.Error(w, "Failed to download file", 500)
+		return
+	}
+	
+	json.NewEncoder(w).Encode(map[string]bool{"updated": true})
 }

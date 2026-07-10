@@ -36,10 +36,11 @@ jobs:
           cd backend
           CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.arch }} go build -ldflags "-s -w" -v -o ../build/bin/trels main.go
 
-      - name: Create tar.gz archive
+      - name: Create tar.gz archive and rename raw binary
         run: |
           cd build/bin
           tar -czvf trels-linux-${{ matrix.arch }}.tar.gz trels
+          cp trels trels-linux-${{ matrix.arch }}
           
       - name: Install nfpm
         run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
@@ -59,6 +60,7 @@ jobs:
           name: linux-artifacts-${{ matrix.arch }}
           path: |
             build/bin/trels-linux-${{ matrix.arch }}.tar.gz
+            build/bin/trels-linux-${{ matrix.arch }}
             build/bin/*.deb
             build/bin/*.rpm
 
@@ -102,9 +104,10 @@ jobs:
           $env:GOARCH="${{ matrix.arch }}"
           go build -ldflags "-s -w -H=windowsgui" -v -o ..\build\bin\trels.exe main.go
           
-      - name: Create zip archive
+      - name: Create zip archive and rename raw binary
         run: |
           Compress-Archive -Path build\bin\trels.exe -DestinationPath build\bin\trels-windows-${{ matrix.arch }}.zip
+          Copy-Item -Path build\bin\trels.exe -Destination build\bin\trels-windows-${{ matrix.arch }}.exe
 
       - name: Compile Inno Setup Installer
         run: |
@@ -119,6 +122,7 @@ jobs:
           name: windows-artifacts-${{ matrix.arch }}
           path: |
             build/bin/trels-windows-${{ matrix.arch }}.zip
+            build/bin/trels-windows-${{ matrix.arch }}.exe
             build/bin/trels-setup-${{ matrix.arch }}.exe
 
   publish:

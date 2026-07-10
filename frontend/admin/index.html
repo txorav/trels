@@ -300,6 +300,19 @@
                         Global proxy settings and configuration will be available in a future release.
                     </p>
                 </div>
+                
+                <div class="card" style="margin-top: 1.5rem;">
+                    <div class="card-header-row"><div class="card-title"><i data-lucide="download-cloud"></i> Software Update</div></div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; padding-top: 0.5rem;">
+                        <div>
+                            <p style="font-weight: 500; font-size: 0.875rem;" id="current-version-text">Current Version: Unknown</p>
+                            <p style="color:hsl(var(--muted-foreground)); font-size: 0.8125rem;" id="update-status-text">Checking for updates...</p>
+                        </div>
+                        <button class="btn btn-primary" id="check-update-btn" style="display: none;">
+                            <i data-lucide="refresh-cw"></i> Update Now
+                        </button>
+                    </div>
+                </div>
             </div>
 
         </main>

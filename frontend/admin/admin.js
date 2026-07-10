@@ -646,4 +646,52 @@ document.addEventListener('DOMContentLoaded', () => {
 
         } catch (e) { /* silent */ }
     }
+
+    // ========== UPDATES ==========
+    async function checkForUpdates() {
+        try {
+            const verRes = await fetch('/api/version', { headers: getAuthHeaders() });
+            if (!verRes.ok) return;
+            const { version } = await verRes.json();
+            document.getElementById('current-version-text').textContent = `Current Version: ${version}`;
+
+            const ghRes = await fetch('https://api.github.com/repos/txorav/trels/releases/latest');
+            if (!ghRes.ok) throw new Error('GitHub API error');
+            const release = await ghRes.json();
+            
+            const statusText = document.getElementById('update-status-text');
+            const updateBtn = document.getElementById('check-update-btn');
+
+            if (release.tag_name !== version) {
+                statusText.innerHTML = `<span style="color: #10b981;">New update available: ${release.tag_name}</span>`;
+                updateBtn.style.display = 'inline-flex';
+                
+                updateBtn.onclick = async () => {
+                    updateBtn.disabled = true;
+                    updateBtn.innerHTML = '<i data-lucide="loader" class="spin"></i> Updating...';
+                    lucide.createIcons();
+                    try {
+                        const upRes = await fetch('/api/update', { method: 'POST', headers: getAuthHeaders() });
+                        if (!upRes.ok) throw new Error(await upRes.text());
+                        showToast('Update downloaded! Please restart Trels to apply.', 'success');
+                        setTimeout(() => window.location.reload(), 4000);
+                    } catch (e) {
+                        showToast('Update failed: ' + e.message, 'error');
+                        updateBtn.disabled = false;
+                        updateBtn.innerHTML = '<i data-lucide="refresh-cw"></i> Update Now';
+                        lucide.createIcons();
+                    }
+                };
+            } else {
+                statusText.textContent = 'You are running the latest version.';
+            }
+        } catch (e) {
+            document.getElementById('update-status-text').textContent = 'Failed to check for updates.';
+        }
+    }
+    
+    // Call on load
+    if (localStorage.getItem('trels_auth')) {
+        checkForUpdates();
+    }
 });
