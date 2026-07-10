@@ -3,8 +3,11 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/subtle"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -12,6 +15,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"math/big"
@@ -34,11 +38,14 @@ import (
 var frontendAssets embed.FS
 
 type TrelsRecord struct {
-	Domain    string `json:"domain"`
-	Port      int    `json:"port"`
-	Enabled   bool   `json:"enabled"`
-	HTTPS     bool   `json:"https"`
-	RateLimit int    `json:"rateLimit"`
+	Domain      string `json:"domain"`
+	Port        int    `json:"port"`
+	Enabled     bool   `json:"enabled"`
+	HTTPS       bool   `json:"https"`
+	RateLimit   int    `json:"rateLimit"`
+	AuthEnabled bool   `json:"authEnabled"`
+	AuthUser    string `json:"authUser"`
+	AuthPass    string `json:"authPass"`
 }
 
 type TrafficStats struct {
@@ -76,6 +83,117 @@ func init() {
 	}
 }
 
+// ========== MACHINE-LEVEL ENCRYPTION UTILS ==========
+
+func getMachineID() string {
+	if runtime.GOOS == "windows" {
+		cmd := exec.Command("reg", "query", `HKLM\SOFTWARE\Microsoft\Cryptography`, "/v", "MachineGuid")
+		out, err := cmd.Output()
+		if err == nil {
+			lines := strings.Split(string(out), "\n")
+			for _, line := range lines {
+				if strings.Contains(line, "MachineGuid") {
+					fields := strings.Fields(line)
+					if len(fields) >= 3 {
+						return fields[2]
+					}
+				}
+			}
+		}
+	} else {
+		// Linux
+		for _, path := range []string{"/etc/machine-id", "/var/lib/dbus/machine-id"} {
+			data, err := os.ReadFile(path)
+			if err == nil {
+				return strings.TrimSpace(string(data))
+			}
+		}
+	}
+	return "fallback-trels-encryption-key-static"
+}
+
+func getEncryptionKey() []byte {
+	id := getMachineID()
+	hash := sha256.Sum256([]byte(id))
+	return hash[:]
+}
+
+func encrypt(plaintext []byte, key []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return nil, err
+	}
+	ciphertext := gcm.Seal(nonce, nonce, plaintext, nil)
+	return ciphertext, nil
+}
+
+func decrypt(ciphertext []byte, key []byte) ([]byte, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return nil, err
+	}
+	nonceSize := gcm.NonceSize()
+	if len(ciphertext) < nonceSize {
+		return nil, fmt.Errorf("ciphertext too short")
+	}
+	nonce, actualCiphertext := ciphertext[:nonceSize], ciphertext[nonceSize:]
+	return gcm.Open(nil, nonce, actualCiphertext, nil)
+}
+
+// ========== AUTOMATIC CERTIFICATE TRUSTING ==========
+
+func trustCertificate(certPath string) {
+	if runtime.GOOS == "windows" {
+		cmd := exec.Command("certutil", "-addstore", "-f", "Root", certPath)
+		if err := cmd.Run(); err != nil {
+			fmt.Printf("Warning: Failed to auto-trust root certificate on Windows: %v\n", err)
+		} else {
+			fmt.Println("Successfully trusted self-signed root certificate in Windows store.")
+		}
+	} else {
+		// Linux auto-trust
+		if _, err := os.Stat("/etc/debian_version"); err == nil {
+			target := "/usr/local/share/ca-certificates/trels.crt"
+			if err := copyFile(certPath, target); err == nil {
+				cmd := exec.Command("update-ca-certificates")
+				if err := cmd.Run(); err == nil {
+					fmt.Println("Successfully trusted certificate on Debian/Ubuntu.")
+				}
+			}
+		} else if _, err := os.Stat("/etc/redhat-release"); err == nil {
+			target := "/etc/pki/ca-trust/source/anchors/trels.crt"
+			if err := copyFile(certPath, target); err == nil {
+				cmd := exec.Command("update-ca-trust", "extract")
+				if err := cmd.Run(); err == nil {
+					fmt.Println("Successfully trusted certificate on RHEL/CentOS/Fedora.")
+				}
+			}
+		}
+	}
+}
+
+func copyFile(src, dst string) error {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(dst, data, 0644)
+}
+
+// ========== HTTP BASIC AUTH MIDDLEWARE (ADMIN PANEL) ==========
+
 func basicAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, pass, ok := r.BasicAuth()
@@ -92,6 +210,8 @@ func basicAuth(next http.Handler) http.Handler {
 	})
 }
 
+// ========== LOCAL STORAGE LOGIC ==========
+
 func getHostsFilePath() string {
 	if runtime.GOOS == "windows" {
 		return `C:\Windows\System32\drivers\etc\hosts`
@@ -99,36 +219,71 @@ func getHostsFilePath() string {
 	return "/etc/hosts"
 }
 
+func initTrackers(domain string) {
+	if trafficStore[domain] == nil {
+		trafficStore[domain] = &TrafficStats{}
+	}
+	if rateLimitStore[domain] == nil {
+		rateLimitStore[domain] = &RateLimiter{}
+	}
+}
+
 func loadRecords() {
 	mutex.Lock()
 	defer mutex.Unlock()
 	data, err := os.ReadFile(recordsFile)
-	if err == nil {
+	if err != nil {
+		return // File doesn't exist yet
+	}
+
+	key := getEncryptionKey()
+	decrypted, err := decrypt(data, key)
+	if err != nil {
+		// Decryption failed. Try parsing as raw unencrypted JSON for migration/import purposes
 		var arr []TrelsRecord
 		if err := json.Unmarshal(data, &arr); err == nil {
+			fmt.Println("Migrating plain-text records.json to encrypted format...")
 			for _, r := range arr {
 				localRecords[r.Domain] = r
-				if trafficStore[r.Domain] == nil {
-					trafficStore[r.Domain] = &TrafficStats{}
-				}
-				if rateLimitStore[r.Domain] == nil {
-					rateLimitStore[r.Domain] = &RateLimiter{}
-				}
+				initTrackers(r.Domain)
 			}
+			saveRecordsLocked()
+			return
+		}
+		fmt.Printf("Warning: Failed to decrypt records database: %v\n", err)
+		return
+	}
+
+	var arr []TrelsRecord
+	if err := json.Unmarshal(decrypted, &arr); err == nil {
+		for _, r := range arr {
+			localRecords[r.Domain] = r
+			initTrackers(r.Domain)
 		}
 	}
 }
 
 func saveRecords() error {
+	mutex.Lock()
+	defer mutex.Unlock()
+	return saveRecordsLocked()
+}
+
+func saveRecordsLocked() error {
 	var arr []TrelsRecord
 	for _, r := range localRecords {
 		arr = append(arr, r)
 	}
-	data, err := json.MarshalIndent(arr, "", "  ")
+	plaintext, err := json.MarshalIndent(arr, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(recordsFile, data, 0600)
+	key := getEncryptionKey()
+	ciphertext, err := encrypt(plaintext, key)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(recordsFile, ciphertext, 0600)
 }
 
 func syncHostsFile() error {
@@ -185,6 +340,8 @@ func syncHostsFile() error {
 	return nil
 }
 
+// ========== RECORD CRUD ENDPOINTS ==========
+
 func handleRecords(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
@@ -213,13 +370,8 @@ func handleRecords(w http.ResponseWriter, r *http.Request) {
 
 		mutex.Lock()
 		localRecords[req.Domain] = req
-		if trafficStore[req.Domain] == nil {
-			trafficStore[req.Domain] = &TrafficStats{}
-		}
-		if rateLimitStore[req.Domain] == nil {
-			rateLimitStore[req.Domain] = &RateLimiter{}
-		}
-		err := saveRecords()
+		initTrackers(req.Domain)
+		err := saveRecordsLocked()
 		mutex.Unlock()
 
 		if err != nil {
@@ -251,7 +403,7 @@ func handleRecords(w http.ResponseWriter, r *http.Request) {
 		delete(localRecords, req.Domain)
 		delete(trafficStore, req.Domain)
 		delete(rateLimitStore, req.Domain)
-		saveRecords()
+		saveRecordsLocked()
 		err := syncHostsFile()
 		mutex.Unlock()
 
@@ -280,7 +432,7 @@ func handleToggle(w http.ResponseWriter, r *http.Request) {
 	if rec, exists := localRecords[req.Domain]; exists {
 		rec.Enabled = req.Enabled
 		localRecords[req.Domain] = rec
-		saveRecords()
+		saveRecordsLocked()
 		err := syncHostsFile()
 		mutex.Unlock()
 		if err != nil {
@@ -300,6 +452,83 @@ func handleMetrics(w http.ResponseWriter, r *http.Request) {
 	defer mutex.RUnlock()
 	json.NewEncoder(w).Encode(trafficStore)
 }
+
+// ========== EXPORT / IMPORT LOGIC ==========
+
+func handleExport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	mutex.RLock()
+	var arr []TrelsRecord
+	for _, rec := range localRecords {
+		arr = append(arr, rec)
+	}
+	mutex.RUnlock()
+
+	data, err := json.MarshalIndent(arr, "", "  ")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", "attachment; filename=trels-export.json")
+	w.Write(data)
+}
+
+func handleImport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var arr []TrelsRecord
+	if err := json.NewDecoder(r.Body).Decode(&arr); err != nil {
+		http.Error(w, "Invalid JSON data", http.StatusBadRequest)
+		return
+	}
+
+	for _, r := range arr {
+		if !domainRegex.MatchString(r.Domain) {
+			http.Error(w, fmt.Sprintf("Invalid domain in export: %s", r.Domain), http.StatusBadRequest)
+			return
+		}
+		if r.Port < 1 || r.Port > 65535 {
+			http.Error(w, fmt.Sprintf("Invalid port in export for %s: %d", r.Domain, r.Port), http.StatusBadRequest)
+			return
+		}
+	}
+
+	mutex.Lock()
+	localRecords = make(map[string]TrelsRecord)
+	for _, r := range arr {
+		localRecords[r.Domain] = r
+		initTrackers(r.Domain)
+	}
+	err := saveRecordsLocked()
+	mutex.Unlock()
+
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to save imported records: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	mutex.Lock()
+	err = syncHostsFile()
+	mutex.Unlock()
+
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to sync hosts file: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{"status": "success", "count": len(arr)})
+}
+
+// ========== PORT SCANNER ==========
 
 func getOpenPorts() []PortInfo {
 	var ports []PortInfo
@@ -382,6 +611,8 @@ func startServerWithFallback(startPort int, bindIP string, handler http.Handler,
 	}
 }
 
+// ========== REVERSE PROXY LOGIC ==========
+
 type trackingWriter struct {
 	http.ResponseWriter
 	bytesWritten int64
@@ -411,11 +642,24 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 1. Force HTTPS redirect
 	if rec.HTTPS && r.TLS == nil {
 		http.Redirect(w, r, "https://"+r.Host+r.RequestURI, http.StatusMovedPermanently)
 		return
 	}
 
+	// 2. Per-mapping Basic Auth Check
+	if rec.AuthEnabled {
+		user, pass, ok := r.BasicAuth()
+		if !ok || subtle.ConstantTimeCompare([]byte(user), []byte(rec.AuthUser)) != 1 || subtle.ConstantTimeCompare([]byte(pass), []byte(rec.AuthPass)) != 1 {
+			w.Header().Set("WWW-Authenticate", fmt.Sprintf(`Basic realm="trels-%s"`, host))
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte("Unauthorized mapping access\n"))
+			return
+		}
+	}
+
+	// 3. Rate Limiting Check
 	if rec.RateLimit > 0 && rl != nil {
 		rl.Mutex.Lock()
 		now := time.Now().Unix()
@@ -433,6 +677,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		rl.Mutex.Unlock()
 	}
 
+	// 4. Update metrics requests
 	if stats != nil {
 		mutex.Lock()
 		stats.Requests++
@@ -461,12 +706,16 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ========== CERTIFICATE HANDLER ==========
+
 func ensureCerts() (string, string, error) {
 	certPath := filepath.Join(filepath.Dir(recordsFile), "cert.pem")
 	keyPath := filepath.Join(filepath.Dir(recordsFile), "key.pem")
 
 	if _, err := os.Stat(certPath); err == nil {
 		if _, err := os.Stat(keyPath); err == nil {
+			// Certificates already exist. Let's make sure they are trusted anyway.
+			trustCertificate(certPath)
 			return certPath, keyPath, nil 
 		}
 	}
@@ -525,6 +774,9 @@ func ensureCerts() (string, string, error) {
 	pem.Encode(keyOut, &pem.Block{Type: "PRIVATE KEY", Bytes: privBytes})
 	keyOut.Close()
 
+	// Trust newly created certificate
+	trustCertificate(certPath)
+
 	return certPath, keyPath, nil
 }
 
@@ -546,6 +798,8 @@ func startHTTPSServerWithFallback(startPort int, bindIP string, handler http.Han
 		break
 	}
 }
+
+// ========== MAIN ==========
 
 func main() {
 	fmt.Println("Trels Backend starting...")
@@ -573,6 +827,8 @@ func main() {
 	apiMux.HandleFunc("/api/records/toggle", handleToggle)
 	apiMux.HandleFunc("/api/metrics", handleMetrics)
 	apiMux.HandleFunc("/api/ports", handlePorts)
+	apiMux.HandleFunc("/api/records/export", handleExport)
+	apiMux.HandleFunc("/api/records/import", handleImport)
 
 	subFS, err := fs.Sub(frontendAssets, "admin_dist")
 	if err != nil {

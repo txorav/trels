@@ -278,6 +278,70 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
+    // ========== EXPORT / IMPORT ==========
+    const exportBtn = document.getElementById('export-mappings-btn');
+    const importBtn = document.getElementById('import-mappings-btn');
+    const importFileInput = document.getElementById('import-file-input');
+
+    if (exportBtn) {
+        exportBtn.addEventListener('click', async () => {
+            try {
+                const res = await fetch('/api/records/export', { headers: getAuthHeaders() });
+                if (!res.ok) throw new Error('Export API failed');
+                const blob = await res.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `trels-export-${new Date().toISOString().slice(0,10)}.json`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                window.URL.revokeObjectURL(url);
+                showToast('success', 'Export successful', 'Mappings exported to JSON file');
+            } catch (err) {
+                showToast('error', 'Export failed', err.message);
+            }
+        });
+    }
+
+    if (importBtn && importFileInput) {
+        importBtn.addEventListener('click', () => {
+            importFileInput.click();
+        });
+        importFileInput.addEventListener('change', async (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            
+            const reader = new FileReader();
+            reader.onload = async (evt) => {
+                try {
+                    const data = JSON.parse(evt.target.result);
+                    if (!Array.isArray(data)) throw new Error('Import data must be a JSON array');
+                    
+                    for (const item of data) {
+                        if (typeof item.domain !== 'string' || typeof item.port !== 'number') {
+                            throw new Error('Invalid record structure inside JSON');
+                        }
+                    }
+
+                    const res = await fetch('/api/records/import', {
+                        method: 'POST',
+                        headers: getAuthHeaders(),
+                        body: JSON.stringify(data)
+                    });
+                    if (!res.ok) throw new Error(await res.text());
+                    const resData = await res.json();
+                    await fetchRecords();
+                    showToast('success', 'Import successful', `Imported ${resData.count} mappings`);
+                } catch (err) {
+                    showToast('error', 'Import failed', err.message);
+                }
+                importFileInput.value = '';
+            };
+            reader.readAsText(file);
+        });
+    }
+
     // ========== RENDER MAPPINGS TABLE ==========
     function renderMappingsTable(records) {
         mappingsTbody.innerHTML = '';
@@ -350,6 +414,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // ========== CONFIG VIEW ==========
+    const configAuthEnabled = document.getElementById('config-authenabled');
+    const configAuthFields = document.getElementById('config-auth-fields');
+
+    if (configAuthEnabled) {
+        configAuthEnabled.addEventListener('change', (e) => {
+            configAuthFields.style.display = e.target.checked ? 'block' : 'none';
+        });
+    }
+
     function openConfigView(domain) {
         const rec = recordsCache[domain];
         if (!rec) return;
@@ -360,7 +433,12 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('config-port').value = rec.port;
         document.getElementById('config-ratelimit').value = rec.rateLimit || 0;
         document.getElementById('config-https').checked = rec.https;
+        document.getElementById('config-authenabled').checked = rec.authEnabled || false;
+        document.getElementById('config-authuser').value = rec.authUser || '';
+        document.getElementById('config-authpass').value = rec.authPass || '';
         document.getElementById('config-enabled').checked = rec.enabled;
+
+        configAuthFields.style.display = rec.authEnabled ? 'block' : 'none';
 
         if (domainChartInstance) {
             domainChartInstance.data.labels = [];
@@ -381,12 +459,20 @@ document.addEventListener('DOMContentLoaded', () => {
         const port = parseInt(document.getElementById('config-port').value, 10);
         const rateLimit = parseInt(document.getElementById('config-ratelimit').value, 10) || 0;
         const https = document.getElementById('config-https').checked;
+        const authEnabled = document.getElementById('config-authenabled').checked;
+        const authUser = document.getElementById('config-authuser').value.trim();
+        const authPass = document.getElementById('config-authpass').value;
         const enabled = document.getElementById('config-enabled').checked;
+
+        if (authEnabled && (!authUser || !authPass)) {
+            showToast('error', 'Authentication setup error', 'Username and password are required when HTTP Basic Auth is enabled.');
+            return;
+        }
 
         try {
             const res = await fetch('/api/records', {
                 method: 'POST', headers: getAuthHeaders(),
-                body: JSON.stringify({ domain, port, enabled, https, rateLimit })
+                body: JSON.stringify({ domain, port, enabled, https, rateLimit, authEnabled, authUser, authPass })
             });
             if (!res.ok) throw new Error(await res.text());
             await fetchRecords();

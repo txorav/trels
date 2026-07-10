@@ -160,9 +160,18 @@
                         <h1>Port Mappings</h1>
                         <p class="page-subtitle">Manage domain-to-port routing rules.</p>
                     </div>
-                    <button class="btn btn-primary" id="open-add-modal-btn">
-                        <i data-lucide="plus"></i> Add Mapping
-                    </button>
+                    <div style="display: flex; gap: 0.5rem; align-items: center;">
+                        <button class="btn btn-outline" id="export-mappings-btn">
+                            <i data-lucide="download"></i> Export
+                        </button>
+                        <button class="btn btn-outline" id="import-mappings-btn">
+                            <i data-lucide="upload"></i> Import
+                        </button>
+                        <input type="file" id="import-file-input" accept=".json" style="display: none;">
+                        <button class="btn btn-primary" id="open-add-modal-btn">
+                            <i data-lucide="plus"></i> Add Mapping
+                        </button>
+                    </div>
                 </div>
                 <div class="table-wrapper" id="mappings-table-wrapper">
                     <table>
@@ -219,6 +228,28 @@
                                     <input type="checkbox" id="config-https">
                                     <span class="slider"></span>
                                 </label>
+                            </div>
+
+                            <div class="setting-row">
+                                <div class="setting-info">
+                                    <label>HTTP Basic Auth</label>
+                                    <p>Protect this domain with Basic Auth credentials.</p>
+                                </div>
+                                <label class="switch">
+                                    <input type="checkbox" id="config-authenabled">
+                                    <span class="slider"></span>
+                                </label>
+                            </div>
+
+                            <div id="config-auth-fields" style="display: none; margin-bottom: 1rem; padding: 1rem; border: 1px solid hsl(var(--border)); border-radius: var(--radius); background: hsl(var(--muted)/0.2);">
+                                <div class="input-group">
+                                    <label for="config-authuser">Username</label>
+                                    <input type="text" id="config-authuser" placeholder="Enter username" autocomplete="off">
+                                </div>
+                                <div class="input-group" style="margin-bottom: 0;">
+                                    <label for="config-authpass">Password</label>
+                                    <input type="password" id="config-authpass" placeholder="Enter password" autocomplete="off">
+                                </div>
                             </div>
 
                             <div class="setting-row">
