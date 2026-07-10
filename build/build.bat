@@ -47,6 +47,17 @@ xcopy /E /I /Y ..\frontend\admin admin_dist >nul
 echo [OK] Assets copied to backend\admin_dist.
 echo.
 
+echo [INFO] Step 5.5: Embedding App Icon...
+go install github.com/akavel/rsrc@latest >nul 2>nul
+for /f %%i in ('go env GOPATH') do set GOPATH=%%i
+if exist "%GOPATH%\bin\rsrc.exe" (
+    "%GOPATH%\bin\rsrc.exe" -ico ..\trels.ico -o rsrc.syso >nul 2>nul
+    echo [OK] App icon embedded.
+) else (
+    echo [WARNING] Could not install rsrc. Icon will not be embedded.
+)
+echo.
+
 echo [INFO] Step 6: Compiling Go binary...
 echo [INFO] Executing: go build -ldflags "-s -w -H=windowsgui" -v -o ..\build\bin\trels.exe main.go
 go build -ldflags "-s -w -H=windowsgui" -v -o ..\build\bin\trels.exe main.go

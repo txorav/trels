@@ -85,6 +85,13 @@ jobs:
       - name: Prepare Frontend Assets
         run: |
           Copy-Item -Path "frontend/admin" -Destination "backend/admin_dist" -Recurse
+
+      - name: Embed App Icon
+        run: |
+          cd backend
+          go install github.com/akavel/rsrc@latest
+          $RSRC = "$(go env GOPATH)\bin\rsrc.exe"
+          & $RSRC -ico ..\trels.ico -o rsrc.syso
           
       - name: Build Windows Binary
         run: |

@@ -7,6 +7,7 @@ DefaultDirName={autopf}\Trels
 DefaultGroupName=Trels
 OutputDir=..\build\bin
 OutputBaseFilename=trels-setup-{#ARCH}
+SetupIconFile=..\trels.ico
 Compression=lzma2
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64 arm64
