@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/subtle"
-	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"embed"
