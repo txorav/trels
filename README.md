@@ -4,6 +4,11 @@
 
 # Trels — Lightweight Local DNS Manager & Reverse Proxy
 
+![GitHub Release](https://img.shields.io/github/v/release/txorav/trels)
+![GitHub Downloads (all assets, all releases)](https://img.shields.io/github/downloads/txorav/trels/total)
+![GitHub License](https://img.shields.io/github/license/txorav/trels)
+
+
 Trels is a secure, cross-platform (Windows & Linux) local domain router and reverse proxy. It allows you to map custom domain names (e.g. `app.local`) to target local ports (e.g. `:3000`) instantly at the operating system level, acting as a zero-config local development router.
 
 The backend is built in high-performance Go, while the frontend is a beautifully polished, single-page admin dashboard styled with modern Shadcn/ui tokens using vanilla HTML/CSS/JS.
@@ -54,7 +59,38 @@ The backend is built in high-performance Go, while the frontend is a beautifully
 
 ---
 
-## Building and Running
+## Installation
+
+Download the latest version from the [Releases page](https://github.com/txorav/trels/releases).
+
+### Windows
+
+Download and run the **`trels-setup-amd64.exe`** (or `arm64`) installer. It will automatically install Trels into `C:\Program Files\Trels` and create a Start Menu shortcut.
+
+Alternatively, download the `.zip` archive and extract it manually. Note: You must run the executable as Administrator.
+
+### Linux (Debian / Ubuntu)
+
+Download the `.deb` package and install it using `dpkg`:
+```bash
+sudo dpkg -i trels_*_amd64.deb
+```
+Enable and start the background service:
+```bash
+sudo systemctl enable --now trels
+```
+
+### Linux (RHEL / Fedora / CentOS)
+
+Download the `.rpm` package and install it using `rpm`:
+```bash
+sudo rpm -i trels_*_amd64.rpm
+sudo systemctl enable --now trels
+```
+
+---
+
+## Building from Source
 
 We provide automated build scripts that handle compiling the Go binary and embedding static assets.
 

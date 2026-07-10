@@ -1,0 +1,20 @@
+name: "trels"
+arch: "${GOARCH}"
+platform: "linux"
+version: "${VERSION}"
+section: "default"
+priority: "extra"
+maintainer: "Trels Team"
+description: "Lightweight Local DNS Manager & Reverse Proxy"
+vendor: "Trels"
+homepage: "https://github.com/txorav/trels"
+license: "MIT"
+contents:
+  - src: "../build/bin/trels"
+    dst: "/usr/local/bin/trels"
+    file_info:
+      mode: 0755
+  - src: "trels.service"
+    dst: "/etc/systemd/system/trels.service"
+    file_info:
+      mode: 0644

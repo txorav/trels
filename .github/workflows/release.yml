@@ -6,12 +6,12 @@ on:
       - 'v*'
 
 jobs:
-  release:
-    name: Build and Release
+  build-linux:
+    name: Build Linux
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -30,17 +30,97 @@ jobs:
         run: |
           mkdir -p build/bin
           cd backend
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags "-s -w" -v -o ../build/bin/trels main.go
+          CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.arch }} go build -ldflags "-s -w" -v -o ../build/bin/trels main.go
+
+      - name: Create tar.gz archive
+        run: |
+          cd build/bin
+          tar -czvf trels-linux-${{ matrix.arch }}.tar.gz trels
+          
+      - name: Install nfpm
+        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest
+        
+      - name: Build deb and rpm packages
+        run: |
+          cd build
+          # Strip 'v' from tag for version
+          export VERSION=${GITHUB_REF_NAME#v}
+          export GOARCH=${{ matrix.arch }}
+          $(go env GOPATH)/bin/nfpm pkg --packager deb --target bin/trels_${VERSION}_${{ matrix.arch }}.deb
+          $(go env GOPATH)/bin/nfpm pkg --packager rpm --target bin/trels_${VERSION}_${{ matrix.arch }}.rpm
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-artifacts-${{ matrix.arch }}
+          path: |
+            build/bin/trels-linux-${{ matrix.arch }}.tar.gz
+            build/bin/*.deb
+            build/bin/*.rpm
+
+  build-windows:
+    name: Build Windows
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+          
+      - name: Download Dependencies
+        run: |
+          cd backend
+          go mod tidy
           
       - name: Build Windows Binary
         run: |
+          mkdir build\bin -Force
           cd backend
-          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "-s -w -H=windowsgui" -v -o ../build/bin/trels.exe main.go
+          $env:CGO_ENABLED="0"
+          $env:GOOS="windows"
+          $env:GOARCH="${{ matrix.arch }}"
+          go build -ldflags "-s -w -H=windowsgui" -v -o ..\build\bin\trels.exe main.go
+          
+      - name: Create zip archive
+        run: |
+          Compress-Archive -Path build\bin\trels.exe -DestinationPath build\bin\trels-windows-${{ matrix.arch }}.zip
 
+      - name: Compile Inno Setup Installer
+        run: |
+          # The version without 'v'
+          $Version = $env:GITHUB_REF_NAME.TrimStart('v')
+          $Arch = "${{ matrix.arch }}"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DAPP_VERSION=$Version /DARCH=$Arch build\setup.iss
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts-${{ matrix.arch }}
+          path: |
+            build/bin/trels-windows-${{ matrix.arch }}.zip
+            build/bin/trels-setup-${{ matrix.arch }}.exe
+
+  publish:
+    name: Publish Release
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+          
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: |
-            build/bin/trels
-            build/bin/trels.exe
+          files: artifacts/*

@@ -1,0 +1,14 @@
+[Unit]
+Description=Trels Local DNS Manager & Reverse Proxy
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/trels
+Restart=on-failure
+RestartSec=5
+# Run as root required to bind ports 80/443 and edit hosts file
+User=root
+
+[Install]
+WantedBy=multi-user.target
