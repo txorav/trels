@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="trels.png" alt="Trels Logo" width="128">
+</div>
+
 # Trels — Lightweight Local DNS Manager & Reverse Proxy
 
 Trels is a secure, cross-platform (Windows & Linux) local domain router and reverse proxy. It allows you to map custom domain names (e.g. `app.local`) to target local ports (e.g. `:3000`) instantly at the operating system level, acting as a zero-config local development router.
