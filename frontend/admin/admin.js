@@ -17,6 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const themeToggle = document.getElementById('theme-toggle');
     const themeIcon = document.getElementById('theme-icon');
+    const settingsThemeToggle = document.getElementById('settings-theme-toggle');
     const omnibar = document.getElementById('omnibar');
 
     const mappingsTbody = document.getElementById('mappings-tbody');
@@ -75,7 +76,7 @@ document.addEventListener('DOMContentLoaded', () => {
         };
 
         const toast = document.createElement('div');
-        toast.className = 'toast';
+        toast.className = `toast toast-${type}`;
         toast.innerHTML = `
             <i data-lucide="${iconMap[type] || 'info'}" class="toast-icon ${type}"></i>
             <div class="toast-content">
@@ -181,21 +182,62 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // ========== THEME ==========
-    const savedTheme = localStorage.getItem('trels_theme');
-    if (savedTheme) {
-        body.setAttribute('data-theme', savedTheme);
-        themeIcon.setAttribute('data-lucide', savedTheme === 'dark' ? 'sun' : 'moon');
+    function applyTheme(theme) {
+        body.setAttribute('data-theme', theme);
+        localStorage.setItem('trels_theme', theme);
+        themeIcon.setAttribute('data-lucide', theme === 'dark' ? 'sun' : 'moon');
         lucide.createIcons({ nodes: [themeIcon.parentElement] });
+        if (settingsThemeToggle) settingsThemeToggle.checked = theme === 'dark';
+        updateChartColors();
     }
+
+    const savedTheme = localStorage.getItem('trels_theme') || 'light';
+    applyTheme(savedTheme);
 
     themeToggle.addEventListener('click', () => {
         const isDark = body.getAttribute('data-theme') === 'dark';
-        const newTheme = isDark ? 'light' : 'dark';
-        body.setAttribute('data-theme', newTheme);
-        localStorage.setItem('trels_theme', newTheme);
-        themeIcon.setAttribute('data-lucide', isDark ? 'moon' : 'sun');
-        lucide.createIcons({ nodes: [themeIcon.parentElement] });
-        updateChartColors();
+        applyTheme(isDark ? 'light' : 'dark');
+    });
+
+    if (settingsThemeToggle) {
+        settingsThemeToggle.addEventListener('change', (e) => {
+            applyTheme(e.target.checked ? 'dark' : 'light');
+        });
+    }
+
+    // ========== KEYBOARD SHORTCUTS ==========
+    document.addEventListener('keydown', (e) => {
+        // Cmd/Ctrl + K → focus search
+        if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+            e.preventDefault();
+            omnibar.focus();
+        }
+        // Cmd/Ctrl + D → toggle dark mode
+        if ((e.metaKey || e.ctrlKey) && e.key === 'd') {
+            e.preventDefault();
+            const isDark = body.getAttribute('data-theme') === 'dark';
+            applyTheme(isDark ? 'light' : 'dark');
+        }
+        // Cmd/Ctrl + N → new mapping
+        if ((e.metaKey || e.ctrlKey) && e.key === 'n') {
+            if (dashboardWrapper.style.display !== 'none') {
+                e.preventDefault();
+                addModal.classList.add('active');
+                fetchPorts();
+            }
+        }
+        // Escape → close modals
+        if (e.key === 'Escape') {
+            if (addModal.classList.contains('active')) {
+                addModal.classList.remove('active');
+                addRecordForm.reset();
+            }
+            if (confirmDialog.classList.contains('active')) {
+                confirmDialog.classList.remove('active');
+                if (confirmCallback) confirmCallback(false);
+                confirmCallback = null;
+            }
+        }
     });
 
     // ========== OMNIBAR ==========
@@ -217,6 +259,18 @@ document.addEventListener('DOMContentLoaded', () => {
         renderMappingsTable(filtered);
     });
 
+    // ========== PLATFORM DETECTION ==========
+    function detectPlatform() {
+        const el = document.getElementById('platform-text');
+        if (!el) return;
+        const ua = navigator.userAgent;
+        if (ua.includes('Win')) el.textContent = 'Windows';
+        else if (ua.includes('Mac')) el.textContent = 'macOS';
+        else if (ua.includes('Linux')) el.textContent = 'Linux';
+        else el.textContent = 'Unknown';
+    }
+    detectPlatform();
+
     // ========== INIT ==========
     function initDashboard() {
         fetchRecords();
@@ -224,6 +278,7 @@ document.addEventListener('DOMContentLoaded', () => {
         setupCharts();
         fetchMetrics();
         metricsInterval = setInterval(fetchMetrics, 2500);
+        checkForUpdates();
     }
 
     // ========== RECORDS ==========
@@ -235,6 +290,10 @@ document.addEventListener('DOMContentLoaded', () => {
             recordsCache = {};
             arr.forEach(r => recordsCache[r.domain] = r);
             renderMappingsTable(arr);
+
+            // Update total mappings sub-stat
+            const totalEl = document.getElementById('stat-total-mappings');
+            if (totalEl) totalEl.textContent = `${arr.length} total mapping${arr.length !== 1 ? 's' : ''}`;
         } catch (e) { /* silent */ }
     }
 
@@ -347,7 +406,7 @@ document.addEventListener('DOMContentLoaded', () => {
         mappingsTbody.innerHTML = '';
         if (!records || records.length === 0) {
             mappingsTbody.innerHTML = `
-                <tr><td colspan="6">
+                <tr><td colspan="7">
                     <div class="empty-state">
                         <i data-lucide="inbox"></i>
                         <h3>No mappings yet</h3>
@@ -372,6 +431,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 <td>${r.https
                     ? '<i data-lucide="shield-check" style="width:16px;height:16px;color:hsl(var(--success))"></i>'
                     : '<i data-lucide="shield-off" style="width:16px;height:16px;color:hsl(var(--muted-foreground));opacity:0.4"></i>'
+                }</td>
+                <td>${r.authEnabled
+                    ? '<i data-lucide="lock" style="width:16px;height:16px;color:hsl(var(--warning))"></i>'
+                    : '<i data-lucide="lock-open" style="width:16px;height:16px;color:hsl(var(--muted-foreground));opacity:0.3"></i>'
                 }</td>
                 <td>${r.rateLimit > 0 ? `<span style="font-family:monospace;font-size:0.75rem;">${r.rateLimit} req/s</span>` : '<span style="color:hsl(var(--muted-foreground));font-size:0.75rem;">—</span>'}</td>
                 <td><span class="badge ${r.enabled ? 'badge-active' : 'badge-inactive'}">${r.enabled ? 'Active' : 'Disabled'}</span></td>
@@ -499,7 +562,7 @@ document.addEventListener('DOMContentLoaded', () => {
         return {
             responsive: true,
             maintainAspectRatio: true,
-            animation: { duration: 200 },
+            animation: { duration: 300, easing: 'easeOutQuart' },
             interaction: { intersect: false, mode: 'index' },
             plugins: {
                 legend: { display: false },
@@ -525,7 +588,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
             },
             elements: {
-                point: { radius: 0, hoverRadius: 3, hitRadius: 8 },
+                point: { radius: 0, hoverRadius: 4, hitRadius: 8 },
                 line: { borderWidth: 2 }
             }
         };
@@ -539,7 +602,7 @@ document.addEventListener('DOMContentLoaded', () => {
             type: 'line',
             data: {
                 labels: [],
-                datasets: [{ label: 'Req/s', data: [], borderColor: c.line, tension: 0.35, fill: true, backgroundColor: c.fill }]
+                datasets: [{ label: 'Req/s', data: [], borderColor: c.line, tension: 0.4, fill: true, backgroundColor: c.fill }]
             },
             options: getChartOptions(c)
         });
@@ -549,7 +612,7 @@ document.addEventListener('DOMContentLoaded', () => {
             type: 'line',
             data: {
                 labels: [],
-                datasets: [{ label: 'Req/s', data: [], borderColor: c.accent, tension: 0.35, fill: true, backgroundColor: c.accentFill }]
+                datasets: [{ label: 'Req/s', data: [], borderColor: c.accent, tension: 0.4, fill: true, backgroundColor: c.accentFill }]
             },
             options: getChartOptions(c)
         });
@@ -614,7 +677,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const reqDiff = stats.requests - (lastDomainReqs[domain] ?? stats.requests);
                     lastDomainReqs[domain] = stats.requests;
 
-                    if (domainChartInstance.data.labels.length > 25) {
+                    if (domainChartInstance.data.labels.length > 30) {
                         domainChartInstance.data.labels.shift();
                         domainChartInstance.data.datasets[0].data.shift();
                     }
@@ -632,11 +695,14 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('stat-data-in').textContent = formatBytes(totalIn);
             document.getElementById('stat-data-out').textContent = formatBytes(totalOut);
 
-            // Global chart
+            // Req/s sub-stat
             const globalDiff = totalReqs - (lastGlobalReqs === 0 ? totalReqs : lastGlobalReqs);
+            const reqRateEl = document.getElementById('stat-reqs-rate');
+            if (reqRateEl) reqRateEl.textContent = `${globalDiff} req/s`;
             lastGlobalReqs = totalReqs;
 
-            if (globalChartInstance.data.labels.length > 25) {
+            // Global chart
+            if (globalChartInstance.data.labels.length > 30) {
                 globalChartInstance.data.labels.shift();
                 globalChartInstance.data.datasets[0].data.shift();
             }
@@ -653,7 +719,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const verRes = await fetch('/api/version', { headers: getAuthHeaders() });
             if (!verRes.ok) return;
             const { version } = await verRes.json();
-            document.getElementById('current-version-text').textContent = `Current Version: ${version}`;
+            const versionEl = document.getElementById('current-version-text');
+            if (versionEl) versionEl.textContent = version;
 
             const ghRes = await fetch('https://api.github.com/repos/txorav/trels/releases/latest');
             if (!ghRes.ok) throw new Error('GitHub API error');
@@ -661,37 +728,36 @@ document.addEventListener('DOMContentLoaded', () => {
             
             const statusText = document.getElementById('update-status-text');
             const updateBtn = document.getElementById('check-update-btn');
+            const updateDot = document.getElementById('update-dot');
 
             if (release.tag_name !== version) {
-                statusText.innerHTML = `<span style="color: #10b981;">New update available: ${release.tag_name}</span>`;
+                statusText.textContent = `Update available: ${release.tag_name}`;
+                statusText.style.color = 'hsl(var(--success))';
+                if (updateDot) { updateDot.classList.remove('current'); updateDot.classList.add('available'); }
                 updateBtn.style.display = 'inline-flex';
                 
                 updateBtn.onclick = async () => {
                     updateBtn.disabled = true;
-                    updateBtn.innerHTML = '<i data-lucide="loader" class="spin"></i> Updating...';
-                    lucide.createIcons();
+                    updateBtn.innerHTML = '<i data-lucide="loader" class="spin"></i> Updating…';
+                    lucide.createIcons({ nodes: [updateBtn] });
                     try {
                         const upRes = await fetch('/api/update', { method: 'POST', headers: getAuthHeaders() });
                         if (!upRes.ok) throw new Error(await upRes.text());
-                        showToast('Update downloaded! Please restart Trels to apply.', 'success');
+                        showToast('success', 'Update downloaded', 'Please restart Trels to apply the update.');
                         setTimeout(() => window.location.reload(), 4000);
                     } catch (e) {
-                        showToast('Update failed: ' + e.message, 'error');
+                        showToast('error', 'Update failed', e.message);
                         updateBtn.disabled = false;
                         updateBtn.innerHTML = '<i data-lucide="refresh-cw"></i> Update Now';
-                        lucide.createIcons();
+                        lucide.createIcons({ nodes: [updateBtn] });
                     }
                 };
             } else {
                 statusText.textContent = 'You are running the latest version.';
             }
         } catch (e) {
-            document.getElementById('update-status-text').textContent = 'Failed to check for updates.';
+            const el = document.getElementById('update-status-text');
+            if (el) el.textContent = 'Could not check for updates.';
         }
-    }
-    
-    // Call on load
-    if (localStorage.getItem('trels_auth')) {
-        checkForUpdates();
     }
 });

@@ -100,7 +100,8 @@
             <header class="topbar">
                 <div class="omnibar-container">
                     <i data-lucide="search"></i>
-                    <input type="text" id="omnibar" placeholder="Search mappings, settings…" spellcheck="false">
+                    <input type="text" id="omnibar" placeholder="Search mappings…" spellcheck="false">
+                    <span class="kbd" style="margin-left: 0.25rem;">⌘K</span>
                 </div>
                 <div class="topbar-actions">
                     <button class="icon-btn" id="theme-toggle" title="Toggle dark mode">
@@ -119,19 +120,21 @@
                 </div>
 
                 <div class="grid grid-cols-4" style="margin-bottom:1.5rem;">
-                    <div class="card">
+                    <div class="card stat-card">
                         <div class="card-title"><i data-lucide="globe"></i> Active Domains</div>
                         <div class="card-value" id="stat-active-domains">0</div>
+                        <div class="card-change" id="stat-total-mappings">0 total mappings</div>
                     </div>
-                    <div class="card">
+                    <div class="card stat-card">
                         <div class="card-title"><i data-lucide="activity"></i> Total Requests</div>
                         <div class="card-value" id="stat-total-reqs">0</div>
+                        <div class="card-change" id="stat-reqs-rate">— req/s</div>
                     </div>
-                    <div class="card">
+                    <div class="card stat-card">
                         <div class="card-title"><i data-lucide="arrow-down-to-line"></i> Data In</div>
                         <div class="card-value" id="stat-data-in">0 B</div>
                     </div>
-                    <div class="card">
+                    <div class="card stat-card">
                         <div class="card-title"><i data-lucide="arrow-up-from-line"></i> Data Out</div>
                         <div class="card-value" id="stat-data-out">0 B</div>
                     </div>
@@ -141,6 +144,7 @@
                     <div class="card">
                         <div class="card-header-row">
                             <div class="card-title">Requests / second</div>
+                            <span class="badge badge-active" style="font-size: 0.625rem;">LIVE</span>
                         </div>
                         <canvas id="global-traffic-chart" height="120"></canvas>
                     </div>
@@ -185,6 +189,7 @@
                                 <th>Domain</th>
                                 <th>Port</th>
                                 <th>HTTPS</th>
+                                <th>Auth</th>
                                 <th>Rate Limit</th>
                                 <th>Status</th>
                                 <th style="width: 48px;"></th>
@@ -273,7 +278,10 @@
                     </div>
 
                     <div class="card">
-                        <div class="card-header-row"><div class="card-title"><i data-lucide="bar-chart-3"></i> Traffic</div></div>
+                        <div class="card-header-row">
+                            <div class="card-title"><i data-lucide="bar-chart-3"></i> Traffic</div>
+                            <span class="badge badge-active" style="font-size: 0.625rem;">LIVE</span>
+                        </div>
                         <canvas id="domain-traffic-chart" height="140"></canvas>
                         
                         <div class="grid grid-cols-2" style="margin-top:1.5rem;">
@@ -293,24 +301,82 @@
             <!-- ===== 4. Settings View ===== -->
             <div class="content-view" id="settings-view">
                 <div class="page-header"><div><h1>Settings</h1><p class="page-subtitle">Global proxy configuration.</p></div></div>
-                <div class="card">
-                    <div class="card-header-row"><div class="card-title"><i data-lucide="info"></i> About</div></div>
-                    <p style="color:hsl(var(--muted-foreground)); font-size: 0.8125rem;">
-                        Trels is a lightweight reverse proxy that maps custom domain names to local ports via the system hosts file.
-                        Global proxy settings and configuration will be available in a future release.
-                    </p>
+                
+                <div class="settings-section">
+                    <div class="card">
+                        <div class="card-header-row"><div class="card-title"><i data-lucide="info"></i> About Trels</div></div>
+                        <p style="color:hsl(var(--muted-foreground)); font-size: 0.8125rem; line-height: 1.6;">
+                            Trels is a lightweight reverse proxy that maps custom domain names to local ports via the system hosts file.
+                            All configurations are encrypted at rest with AES-256-GCM using hardware-derived keys.
+                        </p>
+                        <div class="separator"></div>
+                        <div style="display: flex; gap: 2rem; flex-wrap: wrap;">
+                            <div>
+                                <div class="card-title" style="margin-bottom: 0.25rem;">Version</div>
+                                <span style="font-weight: 600; font-size: 0.875rem;" id="current-version-text">—</span>
+                            </div>
+                            <div>
+                                <div class="card-title" style="margin-bottom: 0.25rem;">Platform</div>
+                                <span style="font-weight: 600; font-size: 0.875rem;" id="platform-text">—</span>
+                            </div>
+                            <div>
+                                <div class="card-title" style="margin-bottom: 0.25rem;">License</div>
+                                <span style="font-weight: 600; font-size: 0.875rem;">MIT</span>
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 
-                <div class="card" style="margin-top: 1.5rem;">
-                    <div class="card-header-row"><div class="card-title"><i data-lucide="download-cloud"></i> Software Update</div></div>
-                    <div style="display: flex; justify-content: space-between; align-items: center; padding-top: 0.5rem;">
-                        <div>
-                            <p style="font-weight: 500; font-size: 0.875rem;" id="current-version-text">Current Version: Unknown</p>
-                            <p style="color:hsl(var(--muted-foreground)); font-size: 0.8125rem;" id="update-status-text">Checking for updates...</p>
+                <div class="settings-section">
+                    <div class="card update-card">
+                        <div class="card-header-row">
+                            <div class="card-title"><i data-lucide="download-cloud"></i> Software Update</div>
                         </div>
-                        <button class="btn btn-primary" id="check-update-btn" style="display: none;">
-                            <i data-lucide="refresh-cw"></i> Update Now
-                        </button>
+                        <div style="display: flex; justify-content: space-between; align-items: center; padding-top: 0.25rem;">
+                            <div class="update-status">
+                                <span class="update-dot current" id="update-dot"></span>
+                                <span id="update-status-text" style="font-size: 0.8125rem; color: hsl(var(--muted-foreground));">Checking for updates…</span>
+                            </div>
+                            <button class="btn btn-primary" id="check-update-btn" style="display: none;">
+                                <i data-lucide="refresh-cw"></i> Update Now
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <div class="card">
+                        <div class="card-header-row"><div class="card-title"><i data-lucide="palette"></i> Appearance</div></div>
+                        <div class="setting-row">
+                            <div class="setting-info">
+                                <label>Dark Mode</label>
+                                <p>Toggle between light and dark themes.</p>
+                            </div>
+                            <label class="switch">
+                                <input type="checkbox" id="settings-theme-toggle">
+                                <span class="slider"></span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <div class="card">
+                        <div class="card-header-row"><div class="card-title"><i data-lucide="keyboard"></i> Keyboard Shortcuts</div></div>
+                        <div style="display: flex; flex-direction: column; gap: 0.5rem; font-size: 0.8125rem;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem 0;">
+                                <span style="color: hsl(var(--muted-foreground));">Focus search</span>
+                                <div style="display: flex; gap: 0.25rem;"><span class="kbd">⌘</span><span class="kbd">K</span></div>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem 0; border-top: 1px solid hsl(var(--border));">
+                                <span style="color: hsl(var(--muted-foreground));">Toggle dark mode</span>
+                                <div style="display: flex; gap: 0.25rem;"><span class="kbd">⌘</span><span class="kbd">D</span></div>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem 0; border-top: 1px solid hsl(var(--border));">
+                                <span style="color: hsl(var(--muted-foreground));">New mapping</span>
+                                <div style="display: flex; gap: 0.25rem;"><span class="kbd">⌘</span><span class="kbd">N</span></div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>
