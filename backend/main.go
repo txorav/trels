@@ -37,7 +37,8 @@ import (
 //go:embed all:admin_dist
 var frontendAssets embed.FS
 
-const AppVersion = "v0.1.5"
+const AppVersion = "v0.1.6"
+const MaxBodySize = 1 << 20 // 1MB
 
 type TrelsRecord struct {
 	Domain      string `json:"domain"`
@@ -74,6 +75,7 @@ var (
 	trafficStore   = make(map[string]*TrafficStats)
 	rateLimitStore = make(map[string]*RateLimiter)
 	domainRegex    = regexp.MustCompile(`^[a-zA-Z0-9.-]+$`)
+	updateClient   = &http.Client{Timeout: 60 * time.Second}
 )
 
 func init() {
@@ -196,11 +198,34 @@ func copyFile(src, dst string) error {
 
 // ========== HTTP BASIC AUTH MIDDLEWARE (ADMIN PANEL) ==========
 
+func getAdminCredentials() ([]byte, []byte) {
+	user := os.Getenv("TRELS_ADMIN_USER")
+	pass := os.Getenv("TRELS_ADMIN_PASS")
+	if user == "" {
+		user = "admin"
+	}
+	if pass == "" {
+		pass = "admin"
+		fmt.Println("WARNING: Using default admin credentials. Set TRELS_ADMIN_USER and TRELS_ADMIN_PASS environment variables for production use.")
+	}
+	return []byte(user), []byte(pass)
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		w.Header().Set("X-Frame-Options", "DENY")
+		w.Header().Set("Referrer-Policy", "no-referrer")
+		w.Header().Set("X-XSS-Protection", "1; mode=block")
+		w.Header().Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		next.ServeHTTP(w, r)
+	})
+}
+
 func basicAuth(next http.Handler) http.Handler {
+	expectedUser, expectedPass := getAdminCredentials()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, pass, ok := r.BasicAuth()
-		expectedUser := []byte("admin")
-		expectedPass := []byte("admin")
 
 		if !ok || subtle.ConstantTimeCompare([]byte(user), expectedUser) != 1 || subtle.ConstantTimeCompare([]byte(pass), expectedPass) != 1 {
 			w.Header().Set("WWW-Authenticate", `Basic realm="restricted"`)
@@ -359,14 +384,20 @@ func handleRecords(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodPost {
+		r.Body = http.MaxBytesReader(w, r.Body, MaxBodySize)
 		var req TrelsRecord
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
 			return
 		}
 
-		if !domainRegex.MatchString(req.Domain) {
+		if !domainRegex.MatchString(req.Domain) || len(req.Domain) > 253 {
 			http.Error(w, "Invalid domain name", http.StatusBadRequest)
+			return
+		}
+
+		if req.Port < 1 || req.Port > 65535 {
+			http.Error(w, "Invalid port number", http.StatusBadRequest)
 			return
 		}
 
@@ -396,10 +427,14 @@ func handleRecords(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodDelete {
+		r.Body = http.MaxBytesReader(w, r.Body, MaxBodySize)
 		var req struct {
 			Domain string `json:"domain"`
 		}
-		json.NewDecoder(r.Body).Decode(&req)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
 		
 		mutex.Lock()
 		delete(localRecords, req.Domain)
@@ -428,7 +463,11 @@ func handleToggle(w http.ResponseWriter, r *http.Request) {
 		Domain  string `json:"domain"`
 		Enabled bool   `json:"enabled"`
 	}
-	json.NewDecoder(r.Body).Decode(&req)
+	r.Body = http.MaxBytesReader(w, r.Body, MaxBodySize)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
 
 	mutex.Lock()
 	if rec, exists := localRecords[req.Domain]; exists {
@@ -465,13 +504,17 @@ func handleExport(w http.ResponseWriter, r *http.Request) {
 	mutex.RLock()
 	var arr []TrelsRecord
 	for _, rec := range localRecords {
-		arr = append(arr, rec)
+		// Strip auth credentials from export to prevent credential leakage
+		safe := rec
+		safe.AuthUser = ""
+		safe.AuthPass = ""
+		arr = append(arr, safe)
 	}
 	mutex.RUnlock()
 
 	data, err := json.MarshalIndent(arr, "", "  ")
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "Export failed", http.StatusInternalServerError)
 		return
 	}
 
@@ -486,9 +529,15 @@ func handleImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, MaxBodySize)
 	var arr []TrelsRecord
 	if err := json.NewDecoder(r.Body).Decode(&arr); err != nil {
 		http.Error(w, "Invalid JSON data", http.StatusBadRequest)
+		return
+	}
+
+	if len(arr) > 1000 {
+		http.Error(w, "Too many records in import (max 1000)", http.StatusBadRequest)
 		return
 	}
 
@@ -596,7 +645,8 @@ func handlePorts(w http.ResponseWriter, r *http.Request) {
 
 func startServerWithFallback(startPort int, bindIP string, handler http.Handler, name string) {
 	port := startPort
-	for {
+	maxAttempts := 100
+	for i := 0; i < maxAttempts; i++ {
 		addr := fmt.Sprintf("%s:%d", bindIP, port)
 		if bindIP == "" {
 			addr = fmt.Sprintf(":%d", port)
@@ -609,8 +659,9 @@ func startServerWithFallback(startPort int, bindIP string, handler http.Handler,
 		}
 		fmt.Printf("[%s] Listening on %s\n", name, addr)
 		go http.Serve(listener, handler)
-		break
+		return
 	}
+	fmt.Printf("[%s] FATAL: Could not bind to any port after %d attempts starting from %d\n", name, maxAttempts, startPort)
 }
 
 // ========== REVERSE PROXY LOGIC ==========
@@ -695,7 +746,7 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 	
 	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
 		w.WriteHeader(http.StatusBadGateway)
-		fmt.Fprintf(w, "Trels Proxy Error: Could not reach local port %d for domain %s\nError: %v", rec.Port, rec.Domain, err)
+		fmt.Fprint(w, "Bad Gateway: The upstream service is unavailable.")
 	}
 
 	tw := &trackingWriter{ResponseWriter: w}
@@ -839,13 +890,13 @@ func main() {
 	apiMux.HandleFunc("/api/version", handleVersion)
 	apiMux.HandleFunc("/api/update", handleUpdate)
 
-	subFS, _ := fs.Sub(frontendAssets, "admin_dist")
-	if err != nil {
-		log.Fatal(err)
+	subFS, fsErr := fs.Sub(frontendAssets, "admin_dist")
+	if fsErr != nil {
+		log.Fatal("Failed to load frontend assets: ", fsErr)
 	}
 	
 	apiMux.Handle("/", http.FileServer(http.FS(subFS)))
-	secureMux := basicAuth(apiMux)
+	secureMux := securityHeaders(basicAuth(apiMux))
 
 	fmt.Println("Starting Admin Panel search...")
 	startServerWithFallback(8080, "127.0.0.1", secureMux, "Admin Panel")
@@ -862,8 +913,8 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	// Fetch latest release
-	resp, err := http.Get("https://api.github.com/repos/txorav/trels/releases/latest")
+	// Fetch latest release with timeout-protected client
+	resp, err := updateClient.Get("https://api.github.com/repos/txorav/trels/releases/latest")
 	if err != nil {
 		http.Error(w, "Failed to check updates", 500)
 		return
@@ -877,7 +928,7 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 			BrowserDownloadURL string `json:"browser_download_url"`
 		} `json:"assets"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, MaxBodySize)).Decode(&release); err != nil {
 		http.Error(w, "Failed to parse updates", 500)
 		return
 	}
@@ -905,8 +956,14 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
-	// Download
-	dResp, err := http.Get(downloadURL)
+	// Validate download URL is from our GitHub repo to prevent redirect hijacking
+	if !strings.HasPrefix(downloadURL, "https://github.com/txorav/trels/") {
+		http.Error(w, "Untrusted download source", 403)
+		return
+	}
+	
+	// Download with timeout-protected client
+	dResp, err := updateClient.Get(downloadURL)
 	if err != nil || dResp.StatusCode != 200 {
 		http.Error(w, "Failed to download update", 500)
 		return
@@ -928,13 +985,13 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 		if runtime.GOOS == "windows" {
 			os.Rename(exePath+".old", exePath)
 		}
-		http.Error(w, "Failed to write update: "+err.Error(), 500)
+		http.Error(w, "Failed to apply update", 500)
 		return
 	}
 	defer out.Close()
 	
 	if _, err := io.Copy(out, dResp.Body); err != nil {
-		http.Error(w, "Failed to download file", 500)
+		http.Error(w, "Failed to apply update", 500)
 		return
 	}
 	
