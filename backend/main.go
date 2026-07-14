@@ -91,7 +91,8 @@ func init() {
 
 func getMachineID() string {
 	if runtime.GOOS == "windows" {
-		cmd := exec.Command("reg", "query", `HKLM\SOFTWARE\Microsoft\Cryptography`, "/v", "MachineGuid")
+		regPath := filepath.Join(os.Getenv("SystemRoot"), "System32", "reg.exe")
+		cmd := exec.Command(regPath, "query", `HKLM\SOFTWARE\Microsoft\Cryptography`, "/v", "MachineGuid")
 		out, err := cmd.Output()
 		if err == nil {
 			lines := strings.Split(string(out), "\n")
@@ -160,7 +161,8 @@ func decrypt(ciphertext []byte, key []byte) ([]byte, error) {
 
 func trustCertificate(certPath string) {
 	if runtime.GOOS == "windows" {
-		cmd := exec.Command("certutil", "-addstore", "-f", "Root", certPath)
+		certutilPath := filepath.Join(os.Getenv("SystemRoot"), "System32", "certutil.exe")
+		cmd := exec.Command(certutilPath, "-addstore", "-f", "Root", certPath)
 		if err := cmd.Run(); err != nil {
 			fmt.Printf("Warning: Failed to auto-trust root certificate on Windows: %v\n", err)
 		} else {
@@ -171,7 +173,7 @@ func trustCertificate(certPath string) {
 		if _, err := os.Stat("/etc/debian_version"); err == nil {
 			target := "/usr/local/share/ca-certificates/trels.crt"
 			if err := copyFile(certPath, target); err == nil {
-				cmd := exec.Command("update-ca-certificates")
+				cmd := exec.Command("/usr/sbin/update-ca-certificates")
 				if err := cmd.Run(); err == nil {
 					fmt.Println("Successfully trusted certificate on Debian/Ubuntu.")
 				}
@@ -179,7 +181,7 @@ func trustCertificate(certPath string) {
 		} else if _, err := os.Stat("/etc/redhat-release"); err == nil {
 			target := "/etc/pki/ca-trust/source/anchors/trels.crt"
 			if err := copyFile(certPath, target); err == nil {
-				cmd := exec.Command("update-ca-trust", "extract")
+				cmd := exec.Command("/usr/bin/update-ca-trust", "extract")
 				if err := cmd.Run(); err == nil {
 					fmt.Println("Successfully trusted certificate on RHEL/CentOS/Fedora.")
 				}
@@ -384,6 +386,10 @@ func handleRecords(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodPost {
+		if r.Header.Get("Content-Type") != "application/json" {
+			http.Error(w, "Invalid Content-Type", http.StatusUnsupportedMediaType)
+			return
+		}
 		r.Body = http.MaxBytesReader(w, r.Body, MaxBodySize)
 		var req TrelsRecord
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -427,6 +433,10 @@ func handleRecords(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if r.Method == http.MethodDelete {
+		if r.Header.Get("Content-Type") != "application/json" {
+			http.Error(w, "Invalid Content-Type", http.StatusUnsupportedMediaType)
+			return
+		}
 		r.Body = http.MaxBytesReader(w, r.Body, MaxBodySize)
 		var req struct {
 			Domain string `json:"domain"`
@@ -457,6 +467,10 @@ func handleRecords(w http.ResponseWriter, r *http.Request) {
 func handleToggle(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if r.Header.Get("Content-Type") != "application/json" {
+		http.Error(w, "Invalid Content-Type", http.StatusUnsupportedMediaType)
 		return
 	}
 	var req struct {
@@ -528,6 +542,10 @@ func handleImport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if r.Header.Get("Content-Type") != "application/json" {
+		http.Error(w, "Invalid Content-Type", http.StatusUnsupportedMediaType)
+		return
+	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, MaxBodySize)
 	var arr []TrelsRecord
@@ -586,7 +604,8 @@ func getOpenPorts() []PortInfo {
 	portSet := make(map[int]bool)
 
 	if runtime.GOOS == "windows" {
-		cmd := exec.Command("netstat", "-ano")
+		netstatPath := filepath.Join(os.Getenv("SystemRoot"), "System32", "netstat.exe")
+		cmd := exec.Command(netstatPath, "-ano")
 		out, err := cmd.Output()
 		if err == nil {
 			scanner := bufio.NewScanner(bytes.NewReader(out))
@@ -605,7 +624,7 @@ func getOpenPorts() []PortInfo {
 			}
 		}
 	} else {
-		cmd := exec.Command("ss", "-tlnp")
+		cmd := exec.Command("/usr/bin/ss", "-tlnp")
 		out, err := cmd.Output()
 		if err == nil {
 			scanner := bufio.NewScanner(bytes.NewReader(out))
@@ -658,7 +677,14 @@ func startServerWithFallback(startPort int, bindIP string, handler http.Handler,
 			continue
 		}
 		fmt.Printf("[%s] Listening on %s\n", name, addr)
-		go http.Serve(listener, handler)
+		
+		srv := &http.Server{
+			Addr:              addr,
+			Handler:           handler,
+			ReadHeaderTimeout: 5 * time.Second,
+			IdleTimeout:       60 * time.Second,
+		}
+		go srv.Serve(listener)
 		return
 	}
 	fmt.Printf("[%s] FATAL: Could not bind to any port after %d attempts starting from %d\n", name, maxAttempts, startPort)
@@ -847,7 +873,14 @@ func startHTTPSServerWithFallback(startPort int, bindIP string, handler http.Han
 			continue
 		}
 		fmt.Printf("[%s] Listening on %s (HTTPS)\n", name, addr)
-		go http.ServeTLS(listener, handler, certFile, keyFile)
+		
+		srv := &http.Server{
+			Addr:              addr,
+			Handler:           handler,
+			ReadHeaderTimeout: 5 * time.Second,
+			IdleTimeout:       60 * time.Second,
+		}
+		go srv.ServeTLS(listener, certFile, keyFile)
 		break
 	}
 }
@@ -976,22 +1009,30 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	
+	newPath := exePath + ".new"
+	out, err := os.OpenFile(newPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	if err != nil {
+		http.Error(w, "Failed to prepare update file", 500)
+		return
+	}
+	
+	if _, err := io.Copy(out, dResp.Body); err != nil {
+		out.Close()
+		os.Remove(newPath)
+		http.Error(w, "Failed to apply update", 500)
+		return
+	}
+	out.Close() // Close before renaming
+	
 	if runtime.GOOS == "windows" {
 		os.Rename(exePath, exePath+".old")
 	}
 	
-	out, err := os.OpenFile(exePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
-	if err != nil {
+	if err := os.Rename(newPath, exePath); err != nil {
 		if runtime.GOOS == "windows" {
 			os.Rename(exePath+".old", exePath)
 		}
-		http.Error(w, "Failed to apply update", 500)
-		return
-	}
-	defer out.Close()
-	
-	if _, err := io.Copy(out, dResp.Body); err != nil {
-		http.Error(w, "Failed to apply update", 500)
+		http.Error(w, "Failed to replace executable", 500)
 		return
 	}
 	
