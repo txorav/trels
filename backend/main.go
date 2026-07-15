@@ -31,6 +31,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -76,7 +77,44 @@ var (
 	rateLimitStore = make(map[string]*RateLimiter)
 	domainRegex    = regexp.MustCompile(`^[a-zA-Z0-9.-]+$`)
 	updateClient   = &http.Client{Timeout: 60 * time.Second}
+
+	// High-performance reverse proxy components
+	proxyCache      = make(map[string]*httputil.ReverseProxy)
+	proxyCacheMutex sync.RWMutex
+	
+	localProxyTransport = &http.Transport{
+		MaxIdleConns:          1000,
+		MaxIdleConnsPerHost:   1000,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		DialContext: (&net.Dialer{
+			Timeout:   5 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+	}
+
+	bufferPool = &bytePool{
+		Pool: sync.Pool{
+			New: func() interface{} {
+				b := make([]byte, 32*1024)
+				return &b
+			},
+		},
+	}
 )
+
+type bytePool struct {
+	sync.Pool
+}
+
+func (p *bytePool) Get() []byte {
+	return *(p.Pool.Get().(*[]byte))
+}
+
+func (p *bytePool) Put(b []byte) {
+	p.Pool.Put(&b)
+}
 
 func init() {
 	exePath, err := os.Executable()
@@ -472,6 +510,10 @@ func handleRecords(w http.ResponseWriter, r *http.Request) {
 		err := syncHostsFile()
 		mutex.Unlock()
 
+		proxyCacheMutex.Lock()
+		delete(proxyCache, req.Domain)
+		proxyCacheMutex.Unlock()
+
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -508,6 +550,13 @@ func handleToggle(w http.ResponseWriter, r *http.Request) {
 		saveRecordsLocked()
 		err := syncHostsFile()
 		mutex.Unlock()
+		
+		if !req.Enabled {
+			proxyCacheMutex.Lock()
+			delete(proxyCache, req.Domain)
+			proxyCacheMutex.Unlock()
+		}
+
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -598,6 +647,10 @@ func handleImport(w http.ResponseWriter, r *http.Request) {
 	}
 	err := saveRecordsLocked()
 	mutex.Unlock()
+
+	proxyCacheMutex.Lock()
+	proxyCache = make(map[string]*httputil.ReverseProxy)
+	proxyCacheMutex.Unlock()
 
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to save imported records: %v", err), http.StatusInternalServerError)
@@ -776,32 +829,39 @@ func proxyHandler(w http.ResponseWriter, r *http.Request) {
 		rl.Mutex.Unlock()
 	}
 
-	// 4. Update metrics requests
+	// 4. Update metrics requests (Lock-free)
 	if stats != nil {
-		mutex.Lock()
-		stats.Requests++
-		stats.BytesIn += r.ContentLength
-		if stats.BytesIn < 0 {
-			stats.BytesIn = 0
+		atomic.AddInt64(&stats.Requests, 1)
+		if r.ContentLength > 0 {
+			atomic.AddInt64(&stats.BytesIn, r.ContentLength)
 		}
-		mutex.Unlock()
 	}
 
-	targetURL, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", rec.Port))
-	proxy := httputil.NewSingleHostReverseProxy(targetURL)
-	
-	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		w.WriteHeader(http.StatusBadGateway)
-		fmt.Fprint(w, "Bad Gateway: The upstream service is unavailable.")
+	proxyCacheMutex.RLock()
+	proxy, hasProxy := proxyCache[host]
+	proxyCacheMutex.RUnlock()
+
+	if !hasProxy {
+		targetURL, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", rec.Port))
+		newProxy := httputil.NewSingleHostReverseProxy(targetURL)
+		newProxy.Transport = localProxyTransport
+		newProxy.BufferPool = bufferPool
+		newProxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
+			w.WriteHeader(http.StatusBadGateway)
+			fmt.Fprint(w, "Bad Gateway: The upstream service is unavailable.")
+		}
+		
+		proxyCacheMutex.Lock()
+		proxyCache[host] = newProxy
+		proxy = newProxy
+		proxyCacheMutex.Unlock()
 	}
 
 	tw := &trackingWriter{ResponseWriter: w}
 	proxy.ServeHTTP(tw, r)
 
 	if stats != nil {
-		mutex.Lock()
-		stats.BytesOut += tw.bytesWritten
-		mutex.Unlock()
+		atomic.AddInt64(&stats.BytesOut, tw.bytesWritten)
 	}
 }
 

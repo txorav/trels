@@ -344,7 +344,7 @@ func TestProxy_BasicAuth(t *testing.T) {
 	mutex.Lock()
 	localRecords["auth.local"] = TrelsRecord{
 		Domain:      "auth.local",
-		Port:        8080,
+		Port:        9999,
 		Enabled:     true,
 		AuthEnabled: true,
 		AuthUser:    "secretuser",
@@ -377,7 +377,7 @@ func TestProxy_BasicAuth(t *testing.T) {
 	}
 	resp.Body.Close()
 
-	// 4. Request with correct auth (should return Bad Gateway since no backend is running on 8080)
+	// 4. Request with correct auth (should return Bad Gateway since no backend is running on 9999)
 	req.SetBasicAuth("secretuser", "secretpass")
 	resp, _ = client.Do(req)
 	if resp.StatusCode != http.StatusBadGateway {
