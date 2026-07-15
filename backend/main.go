@@ -241,11 +241,25 @@ func basicAuth(next http.Handler) http.Handler {
 
 // ========== LOCAL STORAGE LOGIC ==========
 
+var overrideHostsFilePath string
+
 func getHostsFilePath() string {
+	if overrideHostsFilePath != "" {
+		return overrideHostsFilePath
+	}
 	if runtime.GOOS == "windows" {
 		return `C:\Windows\System32\drivers\etc\hosts`
 	}
 	return "/etc/hosts"
+}
+
+// resetStateForTest is a helper for unit testing to reset global state
+func resetStateForTest() {
+	mutex.Lock()
+	defer mutex.Unlock()
+	localRecords = make(map[string]TrelsRecord)
+	trafficStore = make(map[string]*TrafficStats)
+	rateLimitStore = make(map[string]*RateLimiter)
 }
 
 func initTrackers(domain string) {
