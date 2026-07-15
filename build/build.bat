@@ -51,10 +51,10 @@ echo [INFO] Step 5.5: Embedding App Icon...
 go install github.com/akavel/rsrc@latest >nul 2>nul
 for /f %%i in ('go env GOPATH') do set GOPATH=%%i
 if exist "%GOPATH%\bin\rsrc.exe" (
-    "%GOPATH%\bin\rsrc.exe" -ico ..\trels.ico -o rsrc.syso >nul 2>nul
-    echo [OK] App icon embedded.
+    "%GOPATH%\bin\rsrc.exe" -manifest trels.manifest -ico ..\trels.ico -o rsrc_windows_amd64.syso >nul 2>nul
+    echo [OK] App icon and Admin manifest embedded.
 ) else (
-    echo [WARNING] Could not install rsrc. Icon will not be embedded.
+    echo [WARNING] Could not install rsrc. Icon and manifest will not be embedded.
 )
 echo.
 
