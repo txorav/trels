@@ -967,7 +967,36 @@ func startHTTPSServerWithFallback(startPort int, bindIP string, handler http.Han
 
 // ========== MAIN ==========
 
+func killPreviousInstances() {
+	exeName := filepath.Base(os.Args[0])
+	pid := os.Getpid()
+
+	if runtime.GOOS == "windows" {
+		// taskkill /F /FI "PID ne 1234" /IM trels.exe
+		cmd := exec.Command("taskkill", "/F", "/FI", fmt.Sprintf("PID ne %d", pid), "/IM", exeName)
+		cmd.Run() // Ignore errors, means no other instances found
+	} else {
+		cmd := exec.Command("pgrep", "-f", exeName)
+		out, err := cmd.Output()
+		if err == nil {
+			lines := strings.Split(string(out), "\n")
+			for _, line := range lines {
+				line = strings.TrimSpace(line)
+				if line == "" {
+					continue
+				}
+				p, err := strconv.Atoi(line)
+				if err == nil && p != pid {
+					exec.Command("kill", "-9", strconv.Itoa(p)).Run()
+				}
+			}
+		}
+	}
+}
+
 func main() {
+	killPreviousInstances()
+	
 	fmt.Println("Trels Backend starting...")
 	fmt.Printf("Using configuration file: %s\n", recordsFile)
 	loadRecords()
