@@ -87,7 +87,7 @@ document.addEventListener('DOMContentLoaded', () => {
         `;
 
         container.appendChild(toast);
-        lucide.createIcons({ nodes: [toast] });
+        lucide.createIcons({ root: toast });
 
         const close = () => {
             toast.classList.add('removing');
@@ -110,14 +110,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
     confirmCancel.addEventListener('click', () => {
         confirmDialog.classList.remove('active');
-        if (confirmCallback) confirmCallback(false);
-        confirmCallback = null;
+        if (confirmCallback) {
+            confirmCallback(false);
+            confirmCallback = null;
+        }
     });
 
     confirmOk.addEventListener('click', () => {
         confirmDialog.classList.remove('active');
-        if (confirmCallback) confirmCallback(true);
-        confirmCallback = null;
+        if (confirmCallback) {
+            confirmCallback(true);
+            confirmCallback = null;
+        }
     });
 
     // ========== AUTHENTICATION ==========
@@ -130,11 +134,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const user = document.getElementById('username').value;
         const pass = document.getElementById('password').value;
-        sessionStorage.setItem('trels_auth', btoa(`${user}:${pass}`));
+        try {
+            sessionStorage.setItem('trels_auth', btoa(unescape(encodeURIComponent(`${user}:${pass}`))));
+        } catch(e) {
+            authError.textContent = "Error encoding password. Please use standard characters.";
+            loginBtn.disabled = false;
+            loginBtn.textContent = 'Sign In';
+            return;
+        }
 
         try {
             const res = await fetch('/api/records', { headers: getAuthHeaders() });
-            if (!res.ok) throw new Error('Invalid username or password.');
+            if (!res.ok) {
+                if (res.status === 401) throw new Error('Invalid username or password.');
+                throw new Error(`Server returned ${res.status}`);
+            }
             authView.style.display = 'none';
             dashboardWrapper.style.display = 'flex';
             initDashboard();
@@ -147,21 +161,27 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    logoutBtn.addEventListener('click', () => {
+    function handleLogout() {
         sessionStorage.removeItem('trels_auth');
         clearInterval(metricsInterval);
+        
+        lastGlobalReqs = 0;
+        lastDomainReqs = {};
+        
         dashboardWrapper.style.display = 'none';
         authView.style.display = 'flex';
         loginForm.reset();
         authError.textContent = '';
-    });
+    }
+
+    logoutBtn.addEventListener('click', handleLogout);
 
     // ========== SIDEBAR & NAVIGATION ==========
     toggleSidebarBtn.addEventListener('click', () => {
         sidebar.classList.toggle('minimized');
         const isMin = sidebar.classList.contains('minimized');
         sidebarToggleIcon.setAttribute('data-lucide', isMin ? 'panel-left-open' : 'panel-left-close');
-        lucide.createIcons({ nodes: [sidebarToggleIcon.parentElement] });
+        lucide.createIcons({ root: sidebarToggleIcon.parentElement });
     });
 
     function navigateTo(targetId) {
@@ -186,7 +206,7 @@ document.addEventListener('DOMContentLoaded', () => {
         body.setAttribute('data-theme', theme);
         localStorage.setItem('trels_theme', theme);
         themeIcon.setAttribute('data-lucide', theme === 'dark' ? 'sun' : 'moon');
-        lucide.createIcons({ nodes: [themeIcon.parentElement] });
+        lucide.createIcons({ root: themeIcon.parentElement });
         if (settingsThemeToggle) settingsThemeToggle.checked = theme === 'dark';
         updateChartColors();
     }
@@ -234,8 +254,10 @@ document.addEventListener('DOMContentLoaded', () => {
             }
             if (confirmDialog.classList.contains('active')) {
                 confirmDialog.classList.remove('active');
-                if (confirmCallback) confirmCallback(false);
-                confirmCallback = null;
+                if (confirmCallback) {
+                    confirmCallback(false);
+                    confirmCallback = null;
+                }
             }
         }
     });
@@ -285,6 +307,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function fetchRecords() {
         try {
             const res = await fetch('/api/records', { headers: getAuthHeaders() });
+            if (res.status === 401) { handleLogout(); return; }
             if (!res.ok) return;
             const arr = (await res.json()) || [];
             recordsCache = {};
@@ -319,6 +342,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     addRecordForm.addEventListener('submit', async (e) => {
         e.preventDefault();
+        const submitBtn = e.target.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        
         const domain = document.getElementById('record-domain').value.trim();
         const port = parseInt(document.getElementById('record-port').value, 10);
 
@@ -327,6 +353,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 method: 'POST', headers: getAuthHeaders(),
                 body: JSON.stringify({ domain, port, enabled: true, https: false, rateLimit: 0 })
             });
+            if (res.status === 401) { handleLogout(); return; }
             if (!res.ok) throw new Error(await res.text());
             addModal.classList.remove('active');
             addRecordForm.reset();
@@ -334,6 +361,8 @@ document.addEventListener('DOMContentLoaded', () => {
             showToast('success', 'Mapping created', `${domain} → port ${port}`);
         } catch (err) {
             showToast('error', 'Failed to create mapping', err.message);
+        } finally {
+            submitBtn.disabled = false;
         }
     });
 
@@ -397,6 +426,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 importFileInput.value = '';
             };
+            reader.onerror = () => {
+                showToast('error', 'File Read Error', 'Failed to read the selected file.');
+                importFileInput.value = '';
+            };
             reader.readAsText(file);
         });
     }
@@ -413,7 +446,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         <p>Create your first mapping to get started.</p>
                     </div>
                 </td></tr>`;
-            lucide.createIcons({ nodes: [mappingsTbody] });
+            lucide.createIcons({ root: mappingsTbody });
             return;
         }
 
@@ -473,7 +506,7 @@ document.addEventListener('DOMContentLoaded', () => {
             mappingsTbody.appendChild(tr);
         });
 
-        lucide.createIcons({ nodes: [mappingsTbody] });
+        lucide.createIcons({ root: mappingsTbody });
     }
 
     // ========== CONFIG VIEW ==========
@@ -518,6 +551,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     configForm.addEventListener('submit', async (e) => {
         e.preventDefault();
+        const submitBtn = e.target.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        
         const domain = document.getElementById('config-domain').value;
         const port = parseInt(document.getElementById('config-port').value, 10);
         const rateLimit = parseInt(document.getElementById('config-ratelimit').value, 10) || 0;
@@ -529,6 +565,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
         if (authEnabled && (!authUser || !authPass)) {
             showToast('error', 'Authentication setup error', 'Username and password are required when HTTP Basic Auth is enabled.');
+            submitBtn.disabled = false;
             return;
         }
 
@@ -537,11 +574,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 method: 'POST', headers: getAuthHeaders(),
                 body: JSON.stringify({ domain, port, enabled, https, rateLimit, authEnabled, authUser, authPass })
             });
+            if (res.status === 401) { handleLogout(); return; }
             if (!res.ok) throw new Error(await res.text());
             await fetchRecords();
             showToast('success', 'Configuration saved', `Settings for ${domain} have been updated.`);
         } catch (err) {
             showToast('error', 'Failed to save', err.message);
+        } finally {
+            submitBtn.disabled = false;
         }
     });
 
@@ -596,6 +636,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function setupCharts() {
         const c = getChartColors();
+        
+        if (globalChartInstance) { globalChartInstance.destroy(); }
+        if (domainChartInstance) { domainChartInstance.destroy(); }
 
         const gCtx = document.getElementById('global-traffic-chart').getContext('2d');
         globalChartInstance = new Chart(gCtx, {
@@ -641,6 +684,7 @@ document.addEventListener('DOMContentLoaded', () => {
     async function fetchMetrics() {
         try {
             const res = await fetch('/api/metrics', { headers: getAuthHeaders() });
+            if (res.status === 401) { handleLogout(); return; }
             if (!res.ok) return;
             const metrics = await res.json();
             if (!metrics) return;
@@ -649,8 +693,13 @@ document.addEventListener('DOMContentLoaded', () => {
             const now = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 
             const dashMetrics = document.getElementById('dashboard-metrics-tbody');
-            dashMetrics.innerHTML = '';
+            // Avoid DOM thrashing by checking if we need to redraw
+            const needsRedraw = dashMetrics.children.length !== Object.keys(metrics).length;
+            if (needsRedraw) {
+                dashMetrics.innerHTML = '';
+            }
 
+            let rowIndex = 0;
             for (const [domain, stats] of Object.entries(metrics)) {
                 totalReqs += stats.requests;
                 totalIn += stats.bytesIn;
@@ -659,15 +708,25 @@ document.addEventListener('DOMContentLoaded', () => {
                 const rec = recordsCache[domain];
                 if (rec && rec.enabled) activeDomains++;
 
-                // Dashboard per-domain table
-                const dtr = document.createElement('tr');
-                dtr.innerHTML = `
-                    <td style="font-weight:500;">${escapeHtml(domain)}</td>
-                    <td class="port-cell">${stats.requests}</td>
-                    <td class="port-cell">${formatBytes(stats.bytesIn)}</td>
-                    <td class="port-cell">${formatBytes(stats.bytesOut)}</td>
-                `;
-                dashMetrics.appendChild(dtr);
+                // Dashboard per-domain table update
+                if (needsRedraw) {
+                    const dtr = document.createElement('tr');
+                    dtr.innerHTML = `
+                        <td style="font-weight:500;">${escapeHtml(domain)}</td>
+                        <td class="port-cell" data-domain-reqs="${domain}">${stats.requests}</td>
+                        <td class="port-cell" data-domain-in="${domain}">${formatBytes(stats.bytesIn)}</td>
+                        <td class="port-cell" data-domain-out="${domain}">${formatBytes(stats.bytesOut)}</td>
+                    `;
+                    dashMetrics.appendChild(dtr);
+                } else {
+                    // Just update the numbers if rows exist
+                    const reqCell = document.querySelector(`td[data-domain-reqs="${domain}"]`);
+                    const inCell = document.querySelector(`td[data-domain-in="${domain}"]`);
+                    const outCell = document.querySelector(`td[data-domain-out="${domain}"]`);
+                    if (reqCell) reqCell.textContent = stats.requests;
+                    if (inCell) inCell.textContent = formatBytes(stats.bytesIn);
+                    if (outCell) outCell.textContent = formatBytes(stats.bytesOut);
+                }
 
                 // Domain-specific chart
                 if (currentDomainContext === domain) {
@@ -702,13 +761,15 @@ document.addEventListener('DOMContentLoaded', () => {
             lastGlobalReqs = totalReqs;
 
             // Global chart
-            if (globalChartInstance.data.labels.length > 30) {
-                globalChartInstance.data.labels.shift();
-                globalChartInstance.data.datasets[0].data.shift();
+            if (document.getElementById('dashboard-view').classList.contains('active')) {
+                if (globalChartInstance.data.labels.length > 30) {
+                    globalChartInstance.data.labels.shift();
+                    globalChartInstance.data.datasets[0].data.shift();
+                }
+                globalChartInstance.data.labels.push(now);
+                globalChartInstance.data.datasets[0].data.push(globalDiff);
+                globalChartInstance.update();
             }
-            globalChartInstance.data.labels.push(now);
-            globalChartInstance.data.datasets[0].data.push(globalDiff);
-            globalChartInstance.update();
 
         } catch (e) { /* silent */ }
     }

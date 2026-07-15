@@ -91,7 +91,11 @@ func init() {
 
 func getMachineID() string {
 	if runtime.GOOS == "windows" {
-		regPath := filepath.Join(os.Getenv("SystemRoot"), "System32", "reg.exe")
+		sysRoot := os.Getenv("SystemRoot")
+		if sysRoot == "" {
+			sysRoot = `C:\Windows`
+		}
+		regPath := filepath.Join(sysRoot, "System32", "reg.exe")
 		cmd := exec.Command(regPath, "query", `HKLM\SOFTWARE\Microsoft\Cryptography`, "/v", "MachineGuid")
 		out, err := cmd.Output()
 		if err == nil {
@@ -586,6 +590,8 @@ func handleImport(w http.ResponseWriter, r *http.Request) {
 
 	mutex.Lock()
 	localRecords = make(map[string]TrelsRecord)
+	trafficStore = make(map[string]*TrafficStats)
+	rateLimitStore = make(map[string]*RateLimiter)
 	for _, r := range arr {
 		localRecords[r.Domain] = r
 		initTrackers(r.Domain)
@@ -701,7 +707,7 @@ func startServerWithFallback(startPort int, bindIP string, handler http.Handler,
 		go srv.Serve(listener)
 		return
 	}
-	fmt.Printf("[%s] FATAL: Could not bind to any port after %d attempts starting from %d\n", name, maxAttempts, startPort)
+	log.Fatalf("[%s] FATAL: Could not bind to any port after %d attempts starting from %d\n", name, maxAttempts, startPort)
 }
 
 // ========== REVERSE PROXY LOGIC ==========
@@ -1043,6 +1049,7 @@ func handleUpdate(w http.ResponseWriter, r *http.Request) {
 	}
 	
 	if err := os.Rename(newPath, exePath); err != nil {
+		os.Remove(newPath) // Clean up orphaned download
 		if runtime.GOOS == "windows" {
 			os.Rename(exePath+".old", exePath)
 		}
