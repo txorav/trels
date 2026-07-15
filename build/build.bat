@@ -1,6 +1,9 @@
 @echo off
 setlocal
 
+rem Ensure we start in the directory where the batch file is located
+cd /d "%~dp0"
+
 echo ===================================================
 echo             Trels Build Script (Windows)           
 echo ===================================================
